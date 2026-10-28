@@ -22,7 +22,7 @@ const DEFAULT_RULES = [
 const DEFAULT_SETTINGS = {
   clinic: { name: 'Tên phòng khám', address: '', phone: '', doctor: '', license: '', logo: '', note: '' },
   ai: { model: 'gpt-4o', rules: DEFAULT_RULES },
-  update: { repo: '' }
+  update: { repo: 'vdapp-khenhca/kham-rang-3d' }
 };
 
 function readJson(file, fallback) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { return fallback; } }
@@ -61,18 +61,21 @@ ipcMain.handle('cases:load', (e, key) => {
   if (!data) return null;
   const scans = {};
   ['upper', 'lower'].forEach((j) => { for (const ext of ['ply', 'stl']) { const f = path.join(dir, j + '.' + ext); if (fs.existsSync(f)) { scans[j] = { ext, buf: fs.readFileSync(f) }; break; } } });
+  for (const ext of ['jpg', 'png', 'webp']) { const f = path.join(dir, 'pano.' + ext); if (fs.existsSync(f)) { scans.pano = { ext, buf: fs.readFileSync(f) }; break; } }
   return { data, scans };
 });
 ipcMain.handle('cases:save', (e, key, data) => { writeJson(path.join(CASES(), safeKey(key), 'case.json'), data); return true; });
 ipcMain.handle('cases:saveScan', (e, key, jaw, ext, buf) => {
   const dir = path.join(CASES(), safeKey(key)); fs.mkdirSync(dir, { recursive: true });
-  ['ply', 'stl'].forEach((x) => { try { fs.unlinkSync(path.join(dir, jaw + '.' + x)); } catch (er) {} });
-  fs.writeFileSync(path.join(dir, jaw + '.' + (ext === 'stl' ? 'stl' : 'ply')), Buffer.from(buf)); return true;
+  const isPano = jaw === 'pano', exts = isPano ? ['jpg', 'png', 'webp'] : ['ply', 'stl'], useExt = exts.indexOf(ext) >= 0 ? ext : exts[0];
+  if (!isPano && jaw !== 'upper' && jaw !== 'lower') throw new Error('Tên file không hợp lệ');
+  exts.forEach((x) => { try { fs.unlinkSync(path.join(dir, jaw + '.' + x)); } catch (er) {} });
+  fs.writeFileSync(path.join(dir, jaw + '.' + useExt), Buffer.from(buf)); return true;
 });
 ipcMain.handle('cases:delete', (e, key) => { fs.rmSync(path.join(CASES(), safeKey(key)), { recursive: true, force: true }); return true; });
 ipcMain.handle('app:openDataFolder', () => { fs.mkdirSync(DATA(), { recursive: true }); return shell.openPath(DATA()); });
 ipcMain.handle('files:pick', async () => {
-  const r = await dialog.showOpenDialog(win, { title: 'Chọn file scan của khách', properties: ['openFile', 'multiSelections'], filters: [{ name: 'Scan 3D (zip, ply, stl)', extensions: ['zip', 'ply', 'stl'] }] });
+  const r = await dialog.showOpenDialog(win, { title: 'Chọn file scan của khách (kèm ảnh X-quang nếu có)', properties: ['openFile', 'multiSelections'], filters: [{ name: 'Scan 3D và ảnh X-quang', extensions: ['zip', 'ply', 'stl', 'jpg', 'jpeg', 'png', 'webp'] }] });
   if (r.canceled) return [];
   return r.filePaths.map((p) => ({ name: path.basename(p), buf: fs.readFileSync(p) }));
 });
@@ -138,7 +141,7 @@ ipcMain.handle('pdf:make', async (e, { html, name, footerLeft }) => {
 
 /* ---------------- updates (GitHub Releases) ---------------- */
 function configureFeed() {
-  const m = String(settings().update.repo || '').trim().match(/^([\w.-]+)\/([\w.-]+)$/);
+  const m = String(settings().update.repo || '').trim().replace(/^(https?:\/\/)?(www\.)?github\.com\//i, '').replace(/(\.git)?\/*$/i, '').match(/^([\w.-]+)\/([\w.-]+)$/);
   if (m) { try { autoUpdater.setFeedURL({ provider: 'github', owner: m[1], repo: m[2] }); return true; } catch (e) {} }
   return false;
 }
