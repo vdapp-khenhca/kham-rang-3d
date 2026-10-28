@@ -128,8 +128,10 @@
     const { U, V, H, crown, region, seeds, n, occ } = J, N = region.length, sg = occ.dot(n) >= 0 ? 1 : -1;
     seeds.forEach((s) => { s.u = s.p.x * J.e1.x + s.p.y * J.e1.y + s.p.z * J.e1.z; s.v = s.p.x * J.e2.x + s.p.y * J.e2.y + s.p.z * J.e2.z; });
     seeds.forEach((s) => { let dm = 1e9; seeds.forEach((o) => { if (o !== s) { const d = Math.hypot(o.p.x - s.p.x, o.p.y - s.p.y, o.p.z - s.p.z); if (d < dm) dm = d; } }); s.rad2 = Math.pow(Math.min(7.5, Math.max(3.8, dm * 0.62)), 2); });
+    const gd = J.grid, gmap = {}; if (gd) seeds.forEach((q, k) => (gmap[q.f] = k));
     for (let i = 0; i < N; i++) {
       region[i] = -1; if (!crown[i] || !seeds.length) continue;
+      if (gd) { const x = Math.floor((U[i] - gd.u0) / gd.R), y = Math.floor((V[i] - gd.v0) / gd.R); if (x >= 0 && y >= 0 && x < gd.W && y < gd.H) { const f = gd.lab[y * gd.W + x]; if (f && gmap[f] !== undefined) region[i] = gmap[f]; } continue; }
       let best = -1, bd = 1e9;
       for (let k = 0; k < seeds.length; k++) { const du = U[i] - seeds[k].u, dv = V[i] - seeds[k].v, d = du * du + dv * dv, s = (H[i] - seeds[k].h) * sg; if (d < bd && d < seeds[k].rad2 && s > -10 && s < 4.5) { bd = d; best = k; } }
       region[i] = best;
@@ -199,11 +201,15 @@
   function dropRing(f) { FX.rings.delete(f); }
   function fxClear() { FX.glow.clear(); FX.hover.clear(); FX.pin.clear(); FX.sweep = null; [...FX.rings.keys()].forEach(dropRing); FX.tween = null; }
   function repaintAll() { Object.values(S.jaws).forEach(paint); buildLabels(); }
+  function encGrid(g) { if (!g) return null; const r = []; let v = g.lab[0], c = 0; for (let i = 0; i < g.lab.length; i++) { if (g.lab[i] === v && c < 60000) c++; else { r.push(v, c); v = g.lab[i]; c = 1; } } r.push(v, c); return { u0: +g.u0.toFixed(3), v0: +g.v0.toFixed(3), R: g.R, W: g.W, H: g.H, rle: r }; }
+  function decGrid(e) { if (!e || !e.rle) return null; const lab = new Int8Array(e.W * e.H); let p = 0; for (let i = 0; i < e.rle.length; i += 2) { lab.fill(e.rle[i], p, p + e.rle[i + 1]); p += e.rle[i + 1]; } return { u0: e.u0, v0: e.v0, R: e.R, W: e.W, H: e.H, lab }; }
+  function mapGrid(J, fn) { if (J.grid) { const l = J.grid.lab; for (let i = 0; i < l.length; i++) if (l[i]) l[i] = fn(l[i]); } }
   function applyMarks() {
-    ['upper', 'lower'].forEach((n) => { const J = S.jaws[n]; if (!J) return; J.seeds = ((S.C.marks[n]) || []).map((s) => ({ f: s.f, p: new THREE.Vector3(s.x, s.y, s.z), h: s.h })); recompute(J); });
+    ['upper', 'lower'].forEach((n) => { const J = S.jaws[n]; if (!J) return; J.seeds = ((S.C.marks[n]) || []).map((s) => ({ f: s.f, p: new THREE.Vector3(s.x, s.y, s.z), h: s.h })); J.grid = decGrid(S.C.marks.grid && S.C.marks.grid[n]); recompute(J); });
     repaintAll();
   }
   function saveMarks() {
+    S.C.marks.grid = S.C.marks.grid || {}; ['upper', 'lower'].forEach((n) => { const J = S.jaws[n]; if (J) S.C.marks.grid[n] = encGrid(J.grid); });
     ['upper', 'lower'].forEach((n) => { const J = S.jaws[n]; if (J) S.C.marks[n] = J.seeds.map((s) => ({ f: s.f, x: +s.p.x.toFixed(3), y: +s.p.y.toFixed(3), z: +s.p.z.toFixed(3), h: +s.h.toFixed(3) })); });
     persist();
   }
@@ -214,7 +220,7 @@
     return { p: new THREE.Vector3(sx / c, sy / c, sz / c), h: sh / c };
   }
   function placeSeed(J, hitPoint, f) {
-    const sn = snapSeed(J, hitPoint), old = J.seeds.findIndex((s) => s.f === f), s = { f, p: sn.p, h: sn.h };
+    const sn = snapSeed(J, hitPoint), old = J.seeds.findIndex((s) => s.f === f), s = { f, p: sn.p, h: sn.h }; J.grid = null;
     if (old >= 0) J.seeds[old] = s; else J.seeds.push(s);
     S.C.marks.missing = S.C.marks.missing.filter((x) => x !== f);
     recompute(J); repaintAll(); saveMarks();
@@ -380,7 +386,7 @@
     const ja = jawOf(a), J = S.jaws[ja]; if (!J || ORDER.indexOf(a) < 0 || ORDER.indexOf(b) < 0) { toast('Số răng không hợp lệ (11-18, 21-28, 31-38, 41-48)'); return; }
     if (jawOf(b) !== ja) { toast('Hai số phải cùng một hàm'); return; }
     const sa = J.seeds.find((q) => q.f === a); if (!sa) { toast('Không có răng ' + a + ' trên mô hình'); return; } const sb = J.seeds.find((q) => q.f === b);
-    sa.f = b; if (sb) sb.f = a; const t = S.C.teeth[a]; S.C.teeth[a] = S.C.teeth[b]; S.C.teeth[b] = t; if (!S.C.teeth[a]) delete S.C.teeth[a]; if (!S.C.teeth[b]) delete S.C.teeth[b];
+    sa.f = b; if (sb) sb.f = a; mapGrid(J, (v) => (v === a ? b : v === b ? a : v)); const t = S.C.teeth[a]; S.C.teeth[a] = S.C.teeth[b]; S.C.teeth[b] = t; if (!S.C.teeth[a]) delete S.C.teeth[a]; if (!S.C.teeth[b]) delete S.C.teeth[b];
     recompute(J); saveMarks(); persist(); repaintAll(); renderHud(); toast(sb ? 'Đã đổi chỗ răng ' + a + ' và ' + b : 'Đã đổi răng ' + a + ' thành ' + b);
   }
   $('hud').addEventListener('click', (e) => {
@@ -395,10 +401,10 @@
     else if (k === 'ok') { sc.confirmed = true; if (sc.resolve) sc.resolve(); }
   });
   async function detectJaw(jn) {
-    const J = S.jaws[jn]; S.scan.phase = 'detect'; S.scan.jaw = jn; renderHud(); viewJawOnly(jn); J.sweep = null; J.seeds = []; recompute(J); buildLabels(); await sleep(350);
+    const J = S.jaws[jn]; S.scan.phase = 'detect'; S.scan.jaw = jn; renderHud(); viewJawOnly(jn); J.sweep = null; J.seeds = []; J.grid = null; recompute(J); buildLabels(); await sleep(350);
     const r = window.detectTeeth(J, jn, THREE);
     if (!r || r.seeds.length < 4) { S.scan.warn.push('Không nhận diện được ' + (jn === 'upper' ? 'hàm trên' : 'hàm dưới') + ', hãy bấm "Đánh dấu thủ công" cho hàm này.'); return false; }
-    J.sweep = r.sweep; J.seeds = r.seeds.map((q) => ({ f: q.f, p: q.p, h: q.h, show: false }));
+    J.grid = r.grid;     J.sweep = r.sweep; J.seeds = r.seeds.map((q) => ({ f: q.f, p: q.p, h: q.h, show: false }));
     S.C.marks.missing = S.C.marks.missing.filter((x) => jawOf(x) !== jn).concat(r.missing);
     recompute(J); saveMarks(); S.C.detect = S.C.detect || {}; S.C.detect[jn] = { auto: true, date: todayIso(), flipped: !!r.flipped, scale: r.scale }; persist();
     buildLabels(); render(); const dur = 2600; FX.sweep = { jaw: jn, t0: performance.now(), dur }; await sleep(dur + 250); FX.sweep = null; J.seeds.forEach((q) => (q.show = true)); repaintAll(); render();
@@ -678,7 +684,7 @@
   }
   function flipJaw(jn) {
     const J = S.jaws[jn]; if (!J) return; const m = (f) => ((f >= 11 && f <= 18) || (f >= 31 && f <= 38) ? f + 10 : f - 10);
-    J.seeds.forEach((q) => (q.f = m(q.f))); S.C.marks.missing = S.C.marks.missing.map((f) => (jawOf(f) === jn ? m(f) : f));
+    J.seeds.forEach((q) => (q.f = m(q.f))); mapGrid(J, m); S.C.marks.missing = S.C.marks.missing.map((f) => (jawOf(f) === jn ? m(f) : f));
     const nt = {}; Object.keys(S.C.teeth).forEach((k) => { const f = +k; nt[jawOf(f) === jn ? m(f) : f] = S.C.teeth[k]; }); S.C.teeth = nt;
     recompute(J); saveMarks(); persist(); repaintAll(); render(); toast('Đã đảo số răng trái/phải của ' + jawName(jn));
   }
