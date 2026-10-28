@@ -94,3 +94,6 @@ img.pano{width:100%;border-radius:8px;border:1px solid var(--line);background:#0
 .trows{display:grid;gap:6px}.trow{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)}.trow:last-child{border-bottom:0}
 .ck1{display:flex;gap:6px;align-items:center;font-size:12.5px;white-space:nowrap}.ck1 input{accent-color:var(--accent);width:16px;height:16px}
 .tabs{overflow:hidden;padding:6px 6px 0;gap:2px}.tabs button{flex:1 1 auto;white-space:normal;text-align:center;line-height:1.2;padding:6px 5px;font-size:12.5px}
+
+.hud .hbtns{display:flex;flex-wrap:wrap;gap:6px;align-items:center}.hud .hin{width:54px;padding:4px 6px;border:1px solid var(--line,#ccc);border-radius:6px;background:var(--panel);color:inherit;font-family:var(--mono)}
+.hud{max-height:60%;overflow:auto}
