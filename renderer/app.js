@@ -21,7 +21,7 @@
   const S = {
     view: 'home', cases: [], cfg: null, hasKey: false, version: '', dataPath: '', packaged: false, upd: { state: 'idle' },
     C: null, jaws: {}, tint: true, sel: null, tab: 'tooth', mark: null,
-    form: { kind: 'done', svc: '', who: '', role: 'Bác sĩ', date: todayIso(), react: 'Đang cân nhắc', text: '' }, ai: { busy: false, err: '' }, rep: { busy: false, err: '' }, models: []
+    form: { kind: 'done', svc: '', who: '', role: 'Bác sĩ', date: todayIso(), react: 'Đang cân nhắc', text: '' }, ai: { busy: false, err: '' }, rep: { busy: false, err: '' }, all: { busy: false, done: 0, total: 0, fail: [], err: '' }, models: []
   };
   try { S.form.who = localStorage.getItem('kr_who') || ''; S.form.role = localStorage.getItem('kr_role') || 'Bác sĩ'; } catch (e) {}
 
@@ -210,6 +210,7 @@
     if (k === 'done') stopMark();
   });
   $('guide').addEventListener('change', (e) => { if (e.target.id === 'gsel' && S.mark) { S.mark.idx = +e.target.value; markGuide(); } });
+  $('aiAll').onclick = runAll;
   $('markU').onclick = () => startMark('upper'); $('markL').onclick = () => startMark('lower');
 
   function addLog(f, entry) { const log = (S.C.teeth[f] = (S.C.teeth[f] || []).slice()); entry.id = Date.now().toString(36) + Math.random().toString(36).slice(2, 5); log.push(entry); persist(); repaintAll(); render(); }
@@ -271,19 +272,46 @@
   }
 
   /* ================= AI (GPT through the main process; the key never reaches this page) ================= */
+  async function aiTooth(f) {
+    const imgs = await toothImages(f), jaw = jawOf(f) === 'upper' ? 'hàm trên' : 'hàm dưới', miss = S.C.marks.missing.filter((x) => jawOf(x) === jawOf(f)).join(', ') || 'không có';
+    const prompt = 'Có 3 ảnh dựng từ file scan 3D trong miệng (có màu) của răng số ' + f + ' (ký hiệu FDI, ' + jaw + '): ảnh 1 nhìn từ mặt nhai, ảnh 2 nhìn từ phía ngoài (má/môi), ảnh 3 nhìn từ phía trong (lưỡi/vòm).\nCác răng đã đánh dấu mất ở hàm này: ' + miss + '.\n' +
+      'Nhiệm vụ: nêu những gì NHÌN THẤY được (màu men răng, vết ố hoặc tối màu có thể nghi sâu, mòn mặt nhai, mẻ, miếng trám hoặc mão nếu có, vôi răng, tình trạng nướu quanh răng, răng nghiêng hoặc chen chúc). Không khẳng định chẩn đoán chắc chắn từ ảnh scan; dùng từ "có thể", "nghi ngờ". Điều gì cần X-quang hoặc khám trực tiếp thì ghi vào mục review.\n' +
+      'Dịch vụ đề xuất chọn từ: ' + CATALOG.join('; ') + ' (có thể thêm tên khác ngắn gọn). Chỉ đề xuất khi có lý do nhìn thấy được; nếu răng trông ổn thì chỉ cần "Theo dõi định kỳ".\n' +
+      'Trả về JSON: {"observations":["..."],"impression":"nhận định 1-2 câu, dễ hiểu","services":[{"name":"...","priority":"cao|trung bình|thấp","why":"1 câu"}],"review":["điều cần bác sĩ xác nhận"]}. Viết tiếng Việt.';
+    const res = await window.api.ai.run({ prompt, images: imgs });
+    return { observations: (res.observations || []).slice(0, 8), impression: res.impression || '', services: (res.services || []).slice(0, 6), review: (res.review || []).slice(0, 5) };
+  }
   async function runAi(f) {
     if (!S.hasKey) { toast('Chưa có khóa API. Vào Cài đặt để nhập khóa OpenAI.'); return; }
     S.ai = { busy: true, err: '' }; render();
     try {
-      const imgs = await toothImages(f), jaw = jawOf(f) === 'upper' ? 'hàm trên' : 'hàm dưới', miss = S.C.marks.missing.filter((x) => jawOf(x) === jawOf(f)).join(', ') || 'không có';
-      const prompt = 'Có 3 ảnh dựng từ file scan 3D trong miệng (có màu) của răng số ' + f + ' (ký hiệu FDI, ' + jaw + '): ảnh 1 nhìn từ mặt nhai, ảnh 2 nhìn từ phía ngoài (má/môi), ảnh 3 nhìn từ phía trong (lưỡi/vòm).\nCác răng đã đánh dấu mất ở hàm này: ' + miss + '.\n' +
-        'Nhiệm vụ: nêu những gì NHÌN THẤY được (màu men răng, vết ố hoặc tối màu có thể nghi sâu, mòn mặt nhai, mẻ, miếng trám hoặc mão nếu có, vôi răng, tình trạng nướu quanh răng, răng nghiêng hoặc chen chúc). Không khẳng định chẩn đoán chắc chắn từ ảnh scan; dùng từ "có thể", "nghi ngờ". Điều gì cần X-quang hoặc khám trực tiếp thì ghi vào mục review.\n' +
-        'Dịch vụ đề xuất chọn từ: ' + CATALOG.join('; ') + ' (có thể thêm tên khác ngắn gọn). Chỉ đề xuất khi có lý do nhìn thấy được; nếu răng trông ổn thì chỉ cần "Theo dõi định kỳ".\n' +
-        'Trả về JSON: {"observations":["..."],"impression":"nhận định 1-2 câu, dễ hiểu","services":[{"name":"...","priority":"cao|trung bình|thấp","why":"1 câu"}],"review":["điều cần bác sĩ xác nhận"]}. Viết tiếng Việt.';
-      const res = await window.api.ai.run({ prompt, images: imgs });
-      const ai = { observations: (res.observations || []).slice(0, 8), impression: res.impression || '', services: (res.services || []).slice(0, 6), review: (res.review || []).slice(0, 5) };
+      const ai = await aiTooth(f);
       S.ai = { busy: false, err: '' }; addLog(f, { kind: 'ai', who: 'AI (GPT)', date: todayIso(), ai });
     } catch (e) { S.ai = { busy: false, err: cleanErr(e) }; render(); }
+  }
+  /* Khám tất cả răng đã đánh dấu bằng một lần bấm (chạy 3 răng cùng lúc) */
+  async function runAll() {
+    if (S.all.busy) return;
+    if (!S.hasKey) { toast('Chưa có khóa API. Vào Cài đặt để nhập khóa OpenAI.'); return; }
+    let list = []; Object.values(S.jaws).forEach((J) => J.seeds.forEach((s) => list.push(s.f))); list.sort((a, b) => a - b);
+    if (!list.length) { toast('Chưa đánh dấu răng nào. Hãy đánh dấu răng trước.'); return; }
+    const fresh = list.filter((f) => !teethLog(f).some((e) => e.kind === 'ai'));
+    if (fresh.length) list = fresh;
+    else if (!window.confirm('Tất cả ' + list.length + ' răng đã có kết quả AI. Khám lại toàn bộ?')) return;
+    else list = list.slice();
+    S.all = { busy: true, done: 0, total: list.length, fail: [], err: '' }; render();
+    let i = 0;
+    const worker = async () => {
+      while (i < list.length) {
+        const f = list[i++];
+        try { const ai = await aiTooth(f); addLog(f, { kind: 'ai', who: 'AI (GPT)', date: todayIso(), ai }); }
+        catch (e) { S.all.fail.push(f); if (!S.all.err) S.all.err = cleanErr(e); if (/401|429|key|khóa|quota/i.test(S.all.err)) i = list.length; }
+        S.all.done++; render();
+      }
+    };
+    await Promise.all([worker(), worker(), worker()]);
+    const F = S.all.fail.length, ok = S.all.done - F; S.all.busy = false; render();
+    toast(F ? 'Đã khám ' + ok + ' răng, ' + F + ' răng lỗi (' + S.all.err + '). Bấm lại để khám tiếp các răng còn thiếu.' : 'Đã khám xong ' + ok + ' răng. Bác sĩ xem lại từng răng.');
   }
   async function aiReport() {
     if (!S.hasKey) { toast('Chưa có khóa API. Vào Cài đặt để nhập khóa OpenAI.'); return; }
@@ -404,6 +432,7 @@
     const has = Object.keys(S.jaws).length > 0, seeds = Object.values(S.jaws).reduce((a, J) => a + J.seeds.length, 0);
     $('caseT').textContent = S.C.patient.name || S.C.key; $('caseS').textContent = 'Mã hồ sơ ' + S.C.code + ' · tự lưu trên máy này';
     $('tU').hidden = !S.jaws.upper; $('tL').hidden = !S.jaws.lower; $('markU').hidden = !S.jaws.upper || !!S.mark; $('markL').hidden = !S.jaws.lower || !!S.mark;
+    const aa = $('aiAll'); aa.hidden = !seeds; aa.disabled = S.all.busy; aa.textContent = S.all.busy ? 'Đang khám ' + S.all.done + '/' + S.all.total + '…' : 'AI khám tất cả răng';
     $('stat').innerHTML = '<b>' + seeds + '</b> răng đã đánh dấu';
     const sb = $('sb'), top = sb.scrollTop; let h = '';
     if (S.tab === 'doc') h = docPanel();
