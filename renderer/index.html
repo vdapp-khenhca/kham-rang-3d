@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'; connect-src 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Khám Răng 3D</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="appbar">
+  <div class="logo">Khám Răng 3D</div>
+  <nav><button type="button" data-nav="home" aria-current="true">Khách hàng</button><button type="button" data-nav="settings" aria-current="false">Cài đặt</button></nav>
+  <div class="spacer"></div>
+  <div class="upd" id="upd" hidden></div>
+  <span class="ver" id="ver"></span>
+</header>
+
+<section id="vHome" class="page">
+  <div class="home">
+    <div class="homehead">
+      <div><h1>Khách hàng</h1><p class="muted">Mở file scan (zip, ply, stl) để tạo hồ sơ khách mới hoặc cập nhật hồ sơ đã có.</p></div>
+      <div class="row"><input type="text" id="q" placeholder="Tìm theo tên" aria-label="Tìm khách"><button class="btn" type="button" id="newCase">Mở scan khách mới</button></div>
+    </div>
+    <div class="homegrid">
+      <div class="tw"><table id="caseTbl"></table></div>
+      <aside class="panel"><h3>Cần gọi chăm sóc</h3><div id="dueList"></div></aside>
+    </div>
+  </div>
+</section>
+
+<section id="vCase" class="page" hidden>
+  <div class="app">
+    <main class="stage" id="stage">
+      <canvas id="cv"></canvas>
+      <div id="labs"></div>
+      <div class="bar">
+        <button class="tool btn" id="back" type="button">← Danh sách</button>
+        <div class="chip" id="stat"></div>
+        <label class="tool" id="tU" hidden><input type="checkbox" id="vU" checked> Hàm trên</label>
+        <label class="tool" id="tL" hidden><input type="checkbox" id="vL" checked> Hàm dưới</label>
+        <label class="tool"><input type="checkbox" id="vT" checked> Tô màu trạng thái</label>
+        <button class="tool btn" id="markU" type="button" hidden>Đánh dấu răng hàm trên</button>
+        <button class="tool btn" id="markL" type="button" hidden>Đánh dấu răng hàm dưới</button>
+      </div>
+      <div class="guide" id="guide" hidden></div>
+      <div class="views" id="views">
+        <button class="tool btn" data-v="front" type="button">Trước</button><button class="tool btn" data-v="top" type="button">Trên</button><button class="tool btn" data-v="bottom" type="button">Dưới</button><button class="tool btn" data-v="left" type="button">Trái</button><button class="tool btn" data-v="right" type="button">Phải</button>
+      </div>
+      <div class="busy" id="busy" hidden>Đang xử lý…</div>
+    </main>
+    <aside class="side">
+      <div class="sh"><h2 id="caseT"></h2><p id="caseS"></p></div>
+      <div class="tabs" role="tablist"><button type="button" role="tab" data-tab="tooth" aria-selected="true">Răng</button><button type="button" role="tab" data-tab="sum" aria-selected="false">Tổng hợp</button><button type="button" role="tab" data-tab="doc" aria-selected="false">Hồ sơ và PDF</button><button type="button" role="tab" data-tab="care" aria-selected="false">Chăm sóc</button></div>
+      <div class="sb" id="sb"></div>
+    </aside>
+  </div>
+</section>
+
+<section id="vSettings" class="page" hidden><div class="settings" id="setBody"></div></section>
+<div class="toast" id="toast" hidden></div>
+
+<script src="vendor/three.min.js"></script>
+<script src="vendor/PLYLoader.js"></script>
+<script src="vendor/STLLoader.js"></script>
+<script src="vendor/OrbitControls.js"></script>
+<script src="vendor/jszip.min.js"></script>
+<script src="report.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

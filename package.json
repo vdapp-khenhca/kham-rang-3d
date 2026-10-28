@@ -1,0 +1,58 @@
+{
+  "name": "kham-rang-3d",
+  "productName": "Khám Răng 3D",
+  "version": "1.0.0",
+  "description": "Khám răng trên scan 3D, ghi dịch vụ từng răng, AI hỗ trợ và xuất phiếu khám PDF",
+  "main": "main.js",
+  "author": "Phòng khám",
+  "license": "UNLICENSED",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win --publish never",
+    "release": "electron-builder --win --publish always",
+    "dist:zip": "electron-builder --win zip --publish never"
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.9"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "vn.phongkham.khamrang3d",
+    "productName": "Khám Răng 3D",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "shortcutName": "Khám Răng 3D",
+      "deleteAppDataOnUninstall": false
+    },
+    "publish": [
+      {
+        "provider": "github"
+      }
+    ]
+  }
+}
