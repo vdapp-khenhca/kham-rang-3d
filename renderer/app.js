@@ -592,7 +592,7 @@
   const trivial = (n) => /theo dõi|định kỳ|vệ sinh/i.test(n || '');
   function problemTeeth() {
     const set = new Set();
-    Object.keys(S.C.teeth || {}).map(Number).forEach((f) => { svcMap(f).forEach((o) => { if (!o.done.length && o.ai && !trivial(o.name) && o.ai.priority !== 'thấp') set.add(f); }); });
+    Object.keys(S.C.teeth || {}).map(Number).forEach((f) => { svcMap(f).forEach((o) => { if (!o.done.length && o.ai && !trivial(o.name)) set.add(f); }); });
     return set;
   }
   async function screenScan() {
@@ -600,23 +600,27 @@
     const ctx = [S.C.ct && S.C.ct.result && S.C.ct.result.summary ? 'CT: ' + S.C.ct.result.summary : '', S.C.pano && S.C.pano.result && S.C.pano.result.summary ? 'X-quang: ' + S.C.pano.result.summary : ''].filter(Boolean).join(' | ');
     const prompt = 'Ảnh scan 3D trong miệng nhìn từ mặt nhai (' + jns.map((j) => (j === 'upper' ? 'hàm trên' : 'hàm dưới')).join(', ') + '), số FDI trong vòng tròn trắng. ' + (ctx ? 'Kết quả đọc phim: ' + ctx + '. ' : '') + 'Chỉ liệt kê những răng CÓ DẤU HIỆU TỔN HẠI hoặc cần can thiệp nhìn thấy được (sâu, vỡ mẻ, mòn nặng, phục hình hỏng hoặc viền lộ, nướu viêm hoặc tụt, vôi nhiều, xoay lệch gây vấn đề, chân răng sót). Răng bình thường KHÔNG liệt kê. Trả về JSON {"teeth":[{"f":16,"finding":"1 câu"}]}. Tiếng Việt.';
     const res = await window.api.ai.run({ prompt, images: jns.map((jn) => jawShot(jn)) });
-    return (res.teeth || []).map((x) => +x.f).filter((f) => hasSeed(f));
+    S.C.screen = (res.teeth || []).filter((x) => x && hasSeed(+x.f)).map((x) => ({ f: +x.f, finding: String(x.finding || '') }));
+    return S.C.screen.map((x) => x.f);
   }
   async function runPlan(quiet) {
     if (!S.hasKey) { toast('Chưa có khóa API. Vào Cài đặt để nhập khóa OpenAI.'); return; }
     S.rep = { busy: true, err: '' }; if (!quiet) render();
     try {
-      const rows = reportRows(), P = S.C.patient, C = S.C, flag = problemTeeth();
-      const data = rows.filter((r) => flag.has(r.f)).map((r) => {
-        const sv = []; svcMap(r.f).forEach((s2) => { if (!s2.done.length && s2.ai && !trivial(s2.name)) sv.push({ ten: s2.name, uu_tien: s2.ai.priority, ly_do: s2.ai.why, nguy_co: s2.ai.risk, khi: s2.ai.when, nguon: s2.ai.src || 'scan' }); });
-        return { rang: r.f, nhan_xet: r.note, da_lam: r.done.map((d) => d.name), de_xuat: sv };
+      const P = S.C.patient, C = S.C, data = [];
+      Object.keys(C.teeth).map(Number).sort((x, y) => ordOf(x) - ordOf(y)).forEach((f) => {
+        const src = aiLatest(f).map((e) => ({ nguon: e.src === 'ct' ? 'CT' : e.src === 'pano' ? 'X-quang' : 'scan', nhan_xet: e.ai && e.ai.impression || '', quan_sat: ((e.ai && e.ai.observations) || []).slice(0, 4), dich_vu: ((e.ai && e.ai.services) || []).filter((v) => v && !trivial(v.name)).map((v) => ({ ten: v.name, uu_tien: v.priority, ly_do: v.why, nguy_co: v.risk })) })).filter((x) => x.dich_vu.length || /sâu|vỡ|mẻ|nứt|mòn|thấu quang|tiêu|viêm|nha chu|vôi|implant|ngầm|sót|lệch|xoay|tủy/i.test(x.nhan_xet));
+        if (src.length) data.push({ rang: f, nguon: src });
       });
-      const miss = C.marks.missing.filter((f) => WISDOM.indexOf(f) < 0);
+      const screen = (C.screen || []).map((x) => x.f + ': ' + x.finding);
+      const ctSec = (r0) => r0 ? { tong_quan: r0.summary, chi_tiet: (r0.sections || []).map((x) => x.k + ': ' + x.v), chung: r0.general || [] } : null;
+      const iv = C.ct && C.ct.inventory, miss = Array.from(new Set(C.marks.missing.concat(iv && Array.isArray(iv.mat) ? iv.mat.map(Number) : []))).filter((f) => WISDOM.indexOf(f) < 0 && ORDER.indexOf(f) >= 0).sort((x, y) => ordOf(x) - ordOf(y));
       const prompt = 'Bạn là bác sĩ răng hàm mặt lập PHÁC ĐỒ TỔNG QUÁT từ dữ liệu đã KẾT HỢP: ' + ((C.ct && C.ct.result) ? 'CT cắt lớp (chân răng, xương, tủy) + ' : '') + ((C.pano && C.pano.result) ? 'X-quang toàn cảnh + ' : '') + 'scan 3D trong miệng (bề mặt). Chỉ nêu răng CÓ VẤN ĐỀ; răng không cần làm gì thì không nhắc. Không có dữ liệu thì không bịa.\n' +
         'Khách: năm sinh ' + (P.year || 'không rõ') + ', giới tính ' + (P.gender || 'không rõ') + ', tiền sử: ' + (P.history || 'không ghi') + '.\nVị trí mất răng (không tính răng khôn): ' + (miss.join(', ') || 'không có') + '.\n' +
         (C.ct && C.ct.result && C.ct.result.summary ? 'Tổng quan CT: ' + C.ct.result.summary + '\n' : '') + (C.pano && C.pano.result && C.pano.result.summary ? 'Tổng quan X-quang: ' + C.pano.result.summary + '\n' : '') +
-        'Dữ liệu các răng có vấn đề (JSON): ' + JSON.stringify(data) + '\n' +
-        'YÊU CẦU: (1) summary: tình trạng răng miệng tổng quát 3-5 câu. (2) problems: mỗi răng có vấn đề một dòng: f (số FDI), tinh_trang (nêu rõ bị gì, theo nguồn nào: scan, CT hay X-quang), rui_ro (rủi ro có thể xảy ra nếu không xử lý, dùng "có thể"). (3) items: hướng điều trị theo NHÓM DỊCH VỤ chung, KHÔNG nêu tên hãng hay vật liệu cụ thể; title chọn từ: "Trám răng", "Điều trị tủy", "Bọc răng sứ", "Nhổ răng", "Cấy ghép implant", "Điều trị nha chu", "Cạo vôi, làm sạch", "Chỉnh nha", "Phục hình răng mất", "Điều trị khác". Gộp các răng cùng nhóm và cùng mức khẩn vào một mục. group: "now" cần làm ngay, "soon" nên làm trong 1-3 tháng, "later" có thể cân nhắc sau. Mỗi mục: teeth (mảng FDI), outcome (kết quả mong đợi, 1 câu), when (thời gian dự kiến làm tiếp, ví dụ "trong 2 tuần"), visits (số hẹn). Thứ tự ưu tiên: đau và nhiễm trùng, nha chu, trám, nội nha, nhổ, phục hình, implant, chỉnh nha. Không giá, không bán hàng, không dọa; điều chưa chắc ghi "cần bác sĩ xác nhận". (4) advice: 3-5 lời dặn chăm sóc. (5) risks: 2-4 điều cần lưu ý trong tương lai.\n' +
+        (screen.length ? 'Phát hiện trên scan 3D: ' + screen.join('; ') + '\n' : '') + (ctSec(C.ct && C.ct.result) ? 'Chi tiết CT (JSON): ' + JSON.stringify(ctSec(C.ct.result)) + '\n' : '') + (ctSec(C.pano && C.pano.result) ? 'Chi tiết X-quang (JSON): ' + JSON.stringify(ctSec(C.pano.result)) + '\n' : '') +
+        'Dữ liệu từng răng có ghi nhận (JSON): ' + JSON.stringify(data) + '\n' +
+        'YÊU CẦU: (1) summary: tình trạng răng miệng tổng quát 3-5 câu. (2) problems: mỗi răng có vấn đề một dòng: f (số FDI), tinh_trang (nêu rõ bị gì, theo nguồn nào: scan, CT hay X-quang), rui_ro (rủi ro có thể xảy ra nếu không xử lý, dùng "có thể"). (3) items: hướng điều trị theo NHÓM DỊCH VỤ chung, KHÔNG nêu tên hãng hay vật liệu cụ thể; title chọn từ: "Trám răng", "Điều trị tủy", "Bọc răng sứ", "Nhổ răng", "Cấy ghép implant", "Điều trị nha chu", "Cạo vôi, làm sạch", "Chỉnh nha", "Phục hình răng mất", "Điều trị khác". Gộp các răng cùng nhóm và cùng mức khẩn vào một mục. KHÔNG dùng hạng mục "khám trực tiếp" hay "chụp phim" chung chung; chỉ nêu hạng mục điều trị cụ thể. Mỗi răng sâu (kể cả sâu thấy trên CT) phải có dòng trong problems và nằm trong mục "Trám răng" (hoặc "Điều trị tủy" nếu sâu sâu, đau hoặc có tổn thương quanh chóp). Mỗi vị trí MẤT RĂNG (trừ răng khôn 18, 28, 38, 48) phải có dòng trong problems và nằm trong "Phục hình răng mất" hoặc "Cấy ghép implant" (nêu cần đo xương; nếu răng bên cạnh nghiêng, lệch thì thêm "Chỉnh nha"). Răng lệch, xoay, chen chúc gây hại thì thêm "Chỉnh nha". Răng đã điều trị tủy hoặc phục hình lớn cần theo dõi thì đưa vào nhóm "later". group: "now" cần làm ngay, "soon" nên làm trong 1-3 tháng, "later" có thể cân nhắc sau. Mỗi mục: teeth (mảng FDI), outcome (kết quả mong đợi, 1 câu), when (thời gian dự kiến làm tiếp, ví dụ "trong 2 tuần"), visits (số hẹn). Thứ tự ưu tiên: đau và nhiễm trùng, nha chu, trám, nội nha, nhổ, phục hình, implant, chỉnh nha. Không giá, không bán hàng, không dọa; điều chưa chắc ghi "cần bác sĩ xác nhận". (4) advice: 3-5 lời dặn chăm sóc. (5) risks: 2-4 điều cần lưu ý trong tương lai.\n' +
         'JSON: {"summary":"","problems":[{"f":16,"tinh_trang":"","rui_ro":""}],"items":[{"group":"now|soon|later","title":"","teeth":[],"outcome":"","when":"","visits":""}],"advice":[],"risks":[]}. Viết tiếng Việt.';
       const res = await window.api.ai.run({ prompt, images: [] });
       const nums = (v) => (Array.isArray(v) ? v : String(v || '').split(/[ ,;]+/)).map(Number).filter((f) => ORDER.indexOf(f) >= 0);
@@ -624,6 +628,11 @@
         problems: (res.problems || []).filter((x) => x && ORDER.indexOf(+x.f) >= 0).map((x) => ({ f: +x.f, tinh_trang: String(x.tinh_trang || ''), rui_ro: String(x.rui_ro || '') })).sort((a, b) => ordOf(a.f) - ordOf(b.f)),
         items: (res.items || []).filter((x) => x && x.title).map((x) => ({ group: GRP[x.group] ? x.group : 'soon', title: String(x.title), teeth: nums(x.teeth), outcome: String(x.outcome || ''), when: String(x.when || ''), visits: String(x.visits || '') }))
       };
+      const covered = new Set(); C.plan.items.forEach((x) => x.teeth.forEach((f) => covered.add(f)));
+      const need = miss.filter((f) => !covered.has(f));
+      if (need.length) C.plan.items.push({ group: 'soon', title: 'Phục hình răng mất', teeth: need, outcome: 'Phục hồi khả năng ăn nhai, giữ khớp cắn ổn định (cần bác sĩ đo xương để chọn cách làm: implant, cầu răng hoặc chỉnh nha dồn khoảng).', when: 'trong 1–3 tháng, sau khi bác sĩ đánh giá xương', visits: 'cần khám đánh giá thêm' });
+      miss.forEach((f) => { if (!C.plan.problems.some((x) => x.f === f)) C.plan.problems.push({ f, tinh_trang: 'Mất răng.', rui_ro: 'Có thể làm răng bên cạnh nghiêng, răng đối diện trồi, tiêu xương vùng mất răng và khó phục hồi về sau.' }); });
+      C.plan.problems.sort((a2, b2) => ordOf(a2.f) - ordOf(b2.f));
       C.report.summary = String(res.summary || ''); C.report.advice = (res.advice || []).join('\n'); C.report.risks = (res.risks || []).join('\n');
       S.rep = { busy: false, err: '' }; persist(); repaintAll(); render();
     } catch (e) { S.rep = { busy: false, err: cleanErr(e) }; render(); }
