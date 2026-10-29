@@ -68,6 +68,48 @@
     }
     return lab;
   }
+
+  /* Phân vùng 3D theo cung hàm: mỗi răng = một đoạn của cung, ranh giới đặt đúng tại rãnh lõm giữa hai răng (khe kẽ) */
+  function archSegment(J, seeds, jaw) {
+    const geo = J.geo, N = J.crown.length, idx = geo.index ? geo.index.array : null, P = geo.getAttribute('position').array, NR = geo.getAttribute('normal') ? geo.getAttribute('normal').array : null, crown = J.crown, U = J.U, V = J.V;
+    if (!idx || !NR) return null;
+    const ord = jaw === 'upper' ? [18, 17, 16, 15, 14, 13, 12, 11, 21, 22, 23, 24, 25, 26, 27, 28] : [48, 47, 46, 45, 44, 43, 42, 41, 31, 32, 33, 34, 35, 36, 37, 38];
+    const arr = []; ord.forEach((f) => { const q = seeds.find((x) => x.f === f); if (q) arr.push({ f, u: q.p.x * J.e1.x + q.p.y * J.e1.y + q.p.z * J.e1.z, v: q.p.x * J.e2.x + q.p.y * J.e2.y + q.p.z * J.e2.z }); });
+    if (arr.length < 4) return null;
+    const pts = arr.map((a) => [a.u, a.v]), ext = (a, b) => { const dx = a[0] - b[0], dy = a[1] - b[1], L = Math.hypot(dx, dy) || 1; return [a[0] + dx / L * 8, a[1] + dy / L * 8]; };
+    pts.unshift(ext(pts[0], pts[1])); pts.push(ext(pts[pts.length - 1], pts[pts.length - 2]));
+    const cum = [0]; for (let k = 1; k < pts.length; k++) cum.push(cum[k - 1] + Math.hypot(pts[k][0] - pts[k - 1][0], pts[k][1] - pts[k - 1][1]));
+    const seedS = arr.map((a, k) => cum[k + 1]);
+    /* toạ độ dọc cung của từng đỉnh thân răng */
+    const sArr = new Float32Array(N).fill(-1e9), off = new Float32Array(N);
+    for (let i = 0; i < N; i++) {
+      if (!crown[i]) continue; let bd = 1e18, bs = 0;
+      for (let k = 1; k < pts.length; k++) { const ax = pts[k - 1][0], ay = pts[k - 1][1], bx = pts[k][0], by = pts[k][1], dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy || 1; let t = ((U[i] - ax) * dx + (V[i] - ay) * dy) / L2; t = Math.max(0, Math.min(1, t)); const px = ax + t * dx, py = ay + t * dy, d = (U[i] - px) * (U[i] - px) + (V[i] - py) * (V[i] - py); if (d < bd) { bd = d; bs = cum[k - 1] + t * Math.sqrt(L2); } }
+      sArr[i] = bs; off[i] = Math.sqrt(bd);
+    }
+    /* độ lõm từng đỉnh (dương = lõm) */
+    const deg = new Int32Array(N + 1); for (let t = 0; t < idx.length; t += 3) { deg[idx[t]] += 2; deg[idx[t + 1]] += 2; deg[idx[t + 2]] += 2; }
+    const st = new Int32Array(N + 1); for (let i = 0; i < N; i++) st[i + 1] = st[i] + deg[i]; const fill = st.slice(0, N), adj = new Int32Array(st[N]);
+    for (let t = 0; t < idx.length; t += 3) { const a = idx[t], b = idx[t + 1], c = idx[t + 2]; adj[fill[a]++] = b; adj[fill[a]++] = c; adj[fill[b]++] = a; adj[fill[b]++] = c; adj[fill[c]++] = a; adj[fill[c]++] = b; }
+    let cv = new Float32Array(N);
+    for (let i = 0; i < N; i++) { if (!crown[i]) continue; let s = 0, n = 0; for (let k = st[i]; k < st[i + 1]; k++) { const j = adj[k], dx = P[j * 3] - P[i * 3], dy = P[j * 3 + 1] - P[i * 3 + 1], dz = P[j * 3 + 2] - P[i * 3 + 2], L = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1; s += (dx * NR[i * 3] + dy * NR[i * 3 + 1] + dz * NR[i * 3 + 2]) / L; n++; } cv[i] = n ? s / n : 0; }
+    for (let it = 0; it < 2; it++) { const nx = new Float32Array(N); for (let i = 0; i < N; i++) { if (!crown[i]) continue; let s = cv[i], n = 1; for (let k = st[i]; k < st[i + 1]; k++) { const j = adj[k]; if (crown[j]) { s += cv[j]; n++; } } nx[i] = s / n; } cv = nx; }
+    /* mật độ lõm theo s */
+    const BIN = 0.2, nb = Math.ceil(cum[cum.length - 1] / BIN) + 2, D = new Float32Array(nb);
+    for (let i = 0; i < N; i++) { if (sArr[i] < -1e8 || off[i] > 9) continue; const c = cv[i]; if (c > 0.08) D[Math.floor(sArr[i] / BIN)] += c; }
+    const Dm = new Float32Array(nb), sg = 2; for (let b = 0; b < nb; b++) { let s = 0, w = 0; for (let k = -6; k <= 6; k++) { const j = b + k; if (j < 0 || j >= nb) continue; const g = Math.exp(-(k * k) / (2 * sg * sg)); s += D[j] * g; w += g; } Dm[b] = s / w; }
+    let dmax = 0; for (let b = 0; b < nb; b++) if (Dm[b] > dmax) dmax = Dm[b];
+    const WD = WIDTH[jaw], wOf = (f) => WD[(f % 10) - 1] || 7, bnd = [];
+    for (let k = 0; k + 1 < arr.length; k++) {
+      const a = seedS[k], b = seedS[k + 1], g = b - a, wa = wOf(arr[k].f), wb = wOf(arr[k + 1].f), mid = a + g * (wa / (wa + wb)); let best = mid, bsc = -1;
+      const lo = a + 0.25 * g, hi = a + 0.75 * g; for (let s = lo; s <= hi; s += BIN) { const sc = Dm[Math.floor(s / BIN)] * Math.exp(-Math.pow((s - mid) / (0.2 * g), 2)); if (sc > bsc) { bsc = sc; best = s; } }
+      bnd.push(bsc > 0.12 * dmax ? best : mid);
+    }
+    const lab = new Int8Array(N), s0 = seedS[0] - 4, s1 = seedS[seedS.length - 1] + 4;
+    for (let i = 0; i < N; i++) { if (sArr[i] < -1e8 || off[i] > 9) continue; const s = sArr[i]; if (s < s0 || s > s1) continue; let k = 0; while (k < bnd.length && s > bnd[k]) k++; lab[i] = arr[k].f; }
+    return lab;
+  }
+  window.archSegment = archSegment;
   window.detectTeeth = function (J, jaw, THREE, inv) {
     const N = J.crown.length, P = J.geo.getAttribute('position').array, U = J.U, V = J.V, H = J.H, crown = J.crown, sg = J.occ.dot(J.n) >= 0 ? 1 : -1;
     let u0 = 1e9, u1 = -1e9, v0 = 1e9, v1 = -1e9, nc = 0; for (let i = 0; i < N; i++) if (crown[i]) { nc++; if (U[i] < u0) u0 = U[i]; if (U[i] > u1) u1 = U[i]; if (V[i] < v0) v0 = V[i]; if (V[i] > v1) v1 = V[i]; }
@@ -174,6 +216,7 @@
     const rsign = ((-fv * ru + fu * rv) > 0) ? 1 : -1; // chiều tăng của góc là bên phải?
     let pmin = 1e9, pmax = -1e9; const ph = new Float32Array(N); for (let i = 0; i < N; i++) { if (!crown[i]) continue; const d = rel(Math.atan2(V[i] - cv, U[i] - cu)); ph[i] = d; if (d < pmin) pmin = d; if (d > pmax) pmax = d; }
     for (let i = 0; i < N; i++) { let t = (ph[i] - pmin) / Math.max(1e-3, pmax - pmin); t = Math.max(0, Math.min(1, t)); tsw[i] = rsign > 0 ? 1 - t : t; }
-    return { seeds, missing, info, sweep: tsw, quality: { cost: bestR.tot / 16, present: seeds.length, total: 16 }, flipped: false, scale: bestR.kap, grid: { u0, v0, R, W, H: Hh, lab }, vlab, nblobs: blobs.length, dbg: { chain: chain.map((o) => ({ cu: o.cu, cv: o.cv, area: o.area })), mid, aIsRight, res: [bestR.a.out.map((o) => [o.slots, +o.blob.area.toFixed(0)]), bestR.b.out.map((o) => [o.slots, +o.blob.area.toFixed(0)])] } };
+    const vlab2 = archSegment(J, seeds, jaw); if (vlab2) for (let i = 0; i < N; i++) { if (!vlab2[i]) continue; const x = Math.floor((U[i] - u0) / R), y = Math.floor((V[i] - v0) / R); if (x < 0 || y < 0 || x >= W || y >= Hh || !lab[y * W + x]) vlab2[i] = 0; } /* chỉ giữ phần nằm trong bóng của răng nhìn từ trên */
+    return { seeds, missing, info, sweep: tsw, quality: { cost: bestR.tot / 16, present: seeds.length, total: 16 }, flipped: false, scale: bestR.kap, grid: { u0, v0, R, W, H: Hh, lab }, vlab: vlab2 || vlab, nblobs: blobs.length, dbg: { chain: chain.map((o) => ({ cu: o.cu, cv: o.cv, area: o.area })), mid, aIsRight, res: [bestR.a.out.map((o) => [o.slots, +o.blob.area.toFixed(0)]), bestR.b.out.map((o) => [o.slots, +o.blob.area.toFixed(0)])] } };
   };
 })();

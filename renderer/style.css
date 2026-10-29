@@ -135,3 +135,11 @@ dialog::backdrop{background:rgba(0,0,0,.35)}
 .spin{display:inline-block;width:11px;height:11px;border:2px solid #9ab;border-top-color:transparent;border-radius:50%;animation:spn .8s linear infinite}
 @keyframes spn{to{transform:rotate(360deg)}}
 .pe{border:1px solid var(--line,#ddd);border-radius:8px;padding:8px;margin:6px 0}
+
+.svcg{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+.sgc{border:1px solid var(--line,#cfd8d6);background:#fff;border-radius:999px;padding:6px 12px;font:inherit;font-size:.88rem;cursor:pointer}
+.sgc.on{background:#0f6b5e;color:#fff;border-color:#0f6b5e}
+.sgc .cnt{opacity:.75;font-size:.8em}
+.svcd{background:#f3f8f7;border-radius:8px;padding:8px 10px;margin-bottom:10px}
+.tag{display:inline-block;border-radius:4px;padding:1px 7px;font-size:.78rem;background:#e8eceb}
+.tag.now{background:#fde2e2;color:#a12626}.tag.soon{background:#fff1d6;color:#8a5a00}.tag.later{background:#e3eefc;color:#25508f}

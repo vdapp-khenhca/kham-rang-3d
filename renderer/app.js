@@ -128,6 +128,7 @@
     const { U, V, H, crown, region, seeds, n, occ } = J, N = region.length, sg = occ.dot(n) >= 0 ? 1 : -1;
     seeds.forEach((s) => { s.u = s.p.x * J.e1.x + s.p.y * J.e1.y + s.p.z * J.e1.z; s.v = s.p.x * J.e2.x + s.p.y * J.e2.y + s.p.z * J.e2.z; });
     seeds.forEach((s) => { let dm = 1e9; seeds.forEach((o) => { if (o !== s) { const d = Math.hypot(o.p.x - s.p.x, o.p.y - s.p.y, o.p.z - s.p.z); if (d < dm) dm = d; } }); s.rad2 = Math.pow(Math.min(7.5, Math.max(3.8, dm * 0.62)), 2); });
+    if (!J.vlab && !J.grid && seeds.length >= 4 && window.archSegment) { const t = window.archSegment(J, seeds, J.name); if (t) J.vlab = t; }
     const gd = J.grid, vl = J.vlab, gmap = {}; if (gd || vl) seeds.forEach((q, k) => (gmap[q.f] = k));
     for (let i = 0; i < N; i++) {
       region[i] = -1; if (!crown[i] || !seeds.length) continue;
@@ -730,11 +731,22 @@
   const runCombined = runAnalyze, aiReport = runPlan;
 
   /* ---- giao diện: Tab AI phân tích ---- */
+  function svcGroups(P) {
+    const m = new Map(); (P.items || []).forEach((x) => { const k = norm(x.title || ''); if (!k) return; if (!m.has(k)) m.set(k, { key: k, title: x.title, rows: [] }); const o = m.get(k); (x.teeth || []).forEach((f) => { f = +f; if (f && !o.rows.some((r) => r.f === f)) o.rows.push({ f, group: x.group, when: x.when }); }); });
+    return [...m.values()];
+  }
+  function svcChips(P) {
+    const G = svcGroups(P); if (!G.length) return '';
+    let h = '<div class="small muted" style="margin:2px 0 6px">Bấm vào nhóm dịch vụ để xem răng nào cần làm, răng sẽ sáng lên trên mô hình 3D.</div><div class="svcg">' + G.map((g) => '<button type="button" class="sgc' + (S.sg === g.key ? ' on' : '') + '" data-sg="' + esc(g.key) + '">' + esc(g.title) + ' <span class="cnt">' + g.rows.length + ' răng</span></button>').join('') + '</div>';
+    const cur = G.find((g) => g.key === S.sg);
+    if (cur) h += '<div class="svcd"><b>' + esc(cur.title) + '</b>' + cur.rows.slice().sort((a, b) => a.f - b.f).map((r) => { const pr = (P.problems || []).find((x) => +x.f === r.f); return '<div class="pr"><span class="tn risk">' + r.f + '</span><div><div><span class="tag ' + esc(r.group) + '">' + esc(GRP[r.group] || '') + '</span>' + (r.when ? ' <span class="small muted">' + esc(r.when) + '</span>' : '') + '</div>' + (pr ? '<div class="small">' + esc(pr.tinh_trang) + '</div>' : '') + '</div></div>'; }).join('') + '</div>';
+    return h;
+  }
   function planView() {
     const P = S.C.plan, R = S.C.report; if (!P || (!P.items.length && !P.problems.length && !R.summary)) return '<div class="card"><h3>Phác đồ AI</h3><p class="muted small">Tải dữ liệu rồi bấm "Phân tích". Máy sẽ tự làm hết các bước, không cần bấm thêm.</p></div>';
     let h = '<div class="card"><h3>Tình trạng tổng quát</h3><p>' + esc(R.summary || 'Chưa có nhận định.') + '</p></div>';
     h += '<div class="card"><h3>Răng cần chú ý</h3>' + (P.problems.length ? '<div class="pl">' + P.problems.map((x) => '<div class="pr"><span class="tn risk">' + x.f + '</span><div><div>' + esc(x.tinh_trang) + '</div><div class="small muted">Rủi ro nếu không xử lý: ' + esc(x.rui_ro) + '</div></div></div>').join('') + '</div>' : '<p class="muted small">Không thấy răng nào cần xử lý.</p>') + '</div>';
-    h += '<div class="card"><h3>Hướng điều trị</h3>' + (P.items.length ? Object.keys(GRP).map((g) => { const L = P.items.filter((x) => x.group === g); return L.length ? '<h4 class="gh">' + GRP[g] + '</h4>' + L.map((x) => '<div class="pi"><b>' + esc(x.title) + '</b> · răng ' + esc(x.teeth.join(', ')) + (x.when ? '<div class="small muted">Dự kiến: ' + esc([x.when, x.visits].filter(Boolean).join('. ')) + '</div>' : '') + (x.outcome ? '<div class="small">' + esc(x.outcome) + '</div>' : '') + '</div>').join('') : ''; }).join('') : '<p class="muted small">Chưa có hạng mục cần điều trị.</p>') + '</div>';
+    h += '<div class="card"><h3>Hướng điều trị</h3>' + svcChips(P) + (P.items.length ? Object.keys(GRP).map((g) => { const L = P.items.filter((x) => x.group === g); return L.length ? '<h4 class="gh">' + GRP[g] + '</h4>' + L.map((x) => '<div class="pi"><b>' + esc(x.title) + '</b> · răng ' + esc(x.teeth.join(', ')) + (x.when ? '<div class="small muted">Dự kiến: ' + esc([x.when, x.visits].filter(Boolean).join('. ')) + '</div>' : '') + (x.outcome ? '<div class="small">' + esc(x.outcome) + '</div>' : '') + '</div>').join('') : ''; }).join('') : '<p class="muted small">Chưa có hạng mục cần điều trị.</p>') + '</div>';
     return h + '<p class="muted small">Kết quả AI chỉ để bác sĩ tham khảo, bác sĩ xem lại ở tab "Bác sĩ hội chẩn".</p>';
   }
   function aiPanel() {
@@ -910,6 +922,7 @@
     if (t.id === 'runai') runAi(S.sel);
     if (t.id === 'airep') runPlan();
     if (false) { (S.C.plan = S.C.plan || { items: [] }).items.push({ group: 'soon', title: '', teeth: [], why: '', outcome: '', risk: '', when: '', visits: '' }); persist(); render(); }
+    { const sgb = t.closest && t.closest('[data-sg]'); if (sgb) { const k = sgb.dataset.sg; S.sg = S.sg === k ? null : k; const g = S.sg && svcGroups(S.C.plan || { items: [] }).find((x) => x.key === S.sg); FX.pin = new Set(g ? g.rows.map((r) => r.f) : []); FX.color = HL.todo; if (g) { revealTeeth(FX.pin); focusSet(FX.pin); } repaintAll(); render(); return; } }
     if (t.dataset && t.dataset.pld !== undefined) { S.C.plan.items.splice(+t.dataset.pld, 1); persist(); render(); }
     if (t.dataset && t.dataset.pdx !== undefined) { S.C.plan.problems.splice(+t.dataset.pdx, 1); persist(); repaintAll(); render(); }
     if (t.id === 'npadd') { const f = +$('npf').value; if (ORDER.indexOf(f) < 0 || !$('npt').value.trim()) { toast('Nhập số răng và tình trạng'); return; } const P3 = (S.C.plan = S.C.plan || { problems: [], items: [] }); P3.problems.push({ f, tinh_trang: $('npt').value.trim(), rui_ro: $('npr').value.trim() }); P3.problems.sort((a, b) => ordOf(a.f) - ordOf(b.f)); persist(); render(); }
