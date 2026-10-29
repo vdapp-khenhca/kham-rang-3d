@@ -105,7 +105,10 @@ ipcMain.handle('files:pick', async () => {
 /* ---------------- settings and AI ---------------- */
 ipcMain.handle('settings:get', () => ({ settings: settings(), hasKey: !!apiKey(), version: app.getVersion(), dataPath: DATA(), packaged: app.isPackaged }));
 ipcMain.handle('settings:set', (e, patch) => { const s = settings(); ['clinic', 'ai', 'update'].forEach((k) => { if (patch[k]) s[k] = Object.assign({}, s[k], patch[k]); }); writeJson(SETTINGS_FILE(), s); if (patch.update) configureFeed(); return true; });
-ipcMain.handle('settings:setKey', (e, key) => {
+ipcMain.handle('settings:getKey', () => apiKey());
+const KEY_PW = '@Khenhca25';
+ipcMain.handle('settings:setKey', (e, key, pw) => {
+  if (pw !== KEY_PW) throw new Error('Sai mật khẩu. Chỉ người quản trị mới được đổi khóa API.');
   key = String(key || '').trim();
   if (!key) { try { fs.unlinkSync(KEY_FILE()); } catch (er) {} return { ok: true, hasKey: false }; }
   fs.mkdirSync(DATA(), { recursive: true });
@@ -153,7 +156,7 @@ function fontCss() {
   }
   return css;
 }
-ipcMain.handle('pdf:make', async (e, { html, name, footerLeft }) => {
+ipcMain.handle('pdf:make', async (e, { html, name, footerLeft, mode, caseKey }) => {
   const tmp = path.join(app.getPath('temp'), 'kr_report_' + Date.now() + '.html');
   fs.writeFileSync(tmp, html.replace('/*FONTS*/', fontCss()));
   const w = new BrowserWindow({ show: false, webPreferences: { sandbox: true } });
@@ -163,17 +166,20 @@ ipcMain.handle('pdf:make', async (e, { html, name, footerLeft }) => {
     const esc = (s) => String(s || '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
     const footer = '<div style="font-family:Arial,sans-serif;font-size:7.5px;color:#5b6a73;width:100%;padding:0 17mm;display:flex;justify-content:space-between"><span>' + esc(footerLeft) + '</span><span>Trang <span class="pageNumber"></span>/<span class="totalPages"></span></span></div>';
     const buf = await w.webContents.printToPDF({ pageSize: 'A4', printBackground: true, displayHeaderFooter: true, headerTemplate: '<div></div>', footerTemplate: footer, margins: { top: 0.55, bottom: 0.7, left: 0.65, right: 0.65 } });
-    const r = await dialog.showSaveDialog(win, { title: 'Lưu phiếu khám PDF', defaultPath: path.join(app.getPath('documents'), name || 'PhieuKham.pdf'), filters: [{ name: 'PDF', extensions: ['pdf'] }] });
-    if (r.canceled || !r.filePath) return { canceled: true };
-    fs.writeFileSync(r.filePath, buf); shell.openPath(r.filePath); return { path: r.filePath };
+    const fname = String(name || 'PhieuKham.pdf').replace(/[^\w.-]/g, '_');
+    if (mode === 'preview') { const f = path.join(app.getPath('temp'), 'xem_truoc_' + fname); fs.writeFileSync(f, buf); shell.openPath(f); return { path: f }; }
+    let saved = '';
+    if (caseKey) { const d = path.join(CASES(), safeKey(caseKey)); fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, fname), buf); saved = fname; }
+    const r = await dialog.showSaveDialog(win, { title: 'Lưu thêm một bản phiếu khám PDF (bản trong hồ sơ khách đã được lưu)', defaultPath: path.join(app.getPath('documents'), fname), filters: [{ name: 'PDF', extensions: ['pdf'] }] });
+    if (r.canceled || !r.filePath) return { canceled: !saved, saved };
+    fs.writeFileSync(r.filePath, buf); shell.openPath(r.filePath); return { path: r.filePath, saved };
   } finally { w.destroy(); try { fs.unlinkSync(tmp); } catch (er) {} }
 });
+ipcMain.handle('cases:openFile', (e, key, name) => { if (!/^[\w.-]+$/.test(String(name))) return false; const f = path.join(CASES(), safeKey(key), name); if (!fs.existsSync(f)) return false; shell.openPath(f); return true; });
 
 /* ---------------- updates (GitHub Releases) ---------------- */
 function configureFeed() {
-  const m = String(settings().update.repo || '').trim().replace(/^(https?:\/\/)?(www\.)?github\.com\//i, '').replace(/(\.git)?\/*$/i, '').match(/^([\w.-]+)\/([\w.-]+)$/);
-  if (m) { try { autoUpdater.setFeedURL({ provider: 'github', owner: m[1], repo: m[2] }); return true; } catch (e) {} }
-  return false;
+  try { autoUpdater.setFeedURL({ provider: 'github', owner: 'vdapp-khenhca', repo: 'kham-rang-3d' }); return true; } catch (e) { return false; }
 }
 function setupUpdater() {
   autoUpdater.autoDownload = false; autoUpdater.autoInstallOnAppQuit = true; autoUpdater.allowPrerelease = false;

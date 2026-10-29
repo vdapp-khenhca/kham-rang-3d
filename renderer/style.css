@@ -125,3 +125,13 @@ dialog::backdrop{background:rgba(0,0,0,.35)}
 .gh{margin:12px 0 4px;font-size:.95rem}
 .pi{padding:6px 0;border-bottom:1px solid var(--line,#e3e3e3)}
 .pi:last-child{border-bottom:0}
+.ctp{position:relative;overflow:hidden;border-radius:6px;background:#000}
+.ctp img{width:100%;display:block}
+.ctscan{position:absolute;top:0;bottom:0;width:14%;left:-14%;background:linear-gradient(90deg,transparent,rgba(80,220,200,.55),transparent);animation:ctsw 2.4s linear infinite}
+@keyframes ctsw{to{left:100%}}
+.stp{display:flex;gap:8px;align-items:center;padding:3px 0;font-size:.9rem}
+.stp .si{width:18px;text-align:center;font-weight:700}
+.stp.ok .si{color:#1a8f5a}.stp.warn .si{color:#c27a00}
+.spin{display:inline-block;width:11px;height:11px;border:2px solid #9ab;border-top-color:transparent;border-radius:50%;animation:spn .8s linear infinite}
+@keyframes spn{to{transform:rotate(360deg)}}
+.pe{border:1px solid var(--line,#ddd);border-radius:8px;padding:8px;margin:6px 0}
