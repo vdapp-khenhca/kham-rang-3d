@@ -35,9 +35,13 @@ const EXTRA_ITEMS = [
   'ĐỊNH DANH RĂNG: kiểm đếm theo từng góc phần tư từ đường giữa ra ngoài, nhận biết răng cửa 1, cửa 2, nanh, hai tiền hàm, hai hoặc ba răng hàm lớn; răng khôn thường nhỏ, lệch, có thể ngầm. Không bỏ sót ô trống: ô nào không có răng phải ghi là mất, ngầm hoặc chưa mọc, không dồn số.',
   'KẾ HOẠCH ĐIỀU TRỊ: phân nhóm cần làm ngay, nên làm trong 1-3 tháng, có thể cân nhắc sau. Mỗi mục nêu căn cứ, kết quả mong đợi, nguy cơ nếu không làm (dùng "có thể"), thời điểm làm tiếp, số lần hẹn. Thứ tự: đau và nhiễm trùng, nha chu, bảo tồn, nội nha, phẫu thuật, phục hình, cấy ghép, chỉnh nha, thẩm mỹ.'
 ];
+const EXTRA2_ITEMS = [
+  'ĐỌC PHIM CHUYÊN KHOA: thân răng cản quang rất mạnh (trắng sáng hơn men răng, kèm vệt nhiễu) là mão sứ kim loại, mão kim loại hoặc toàn sứ zirconia đã có, không phải bệnh; ghi là "đã bọc sứ" và không đề xuất làm sứ lại trừ khi thấy hở bờ, sâu thứ phát hoặc thấu quang quanh chóp. Nhiễu kim loại chỉ ghi chú, không đưa răng vào danh sách cần làm. Đọc điều trị tủy theo độ dài và độ kín khít, sâu theo vùng tối hơn men, nha chu theo khoảng từ đường nối men-cement tới đỉnh xương, mất răng theo ô xương không răng (đề xuất phục hình hoặc implant, đo xương, chỉnh nha nếu răng nghiêng lệch).'
+];
 const fmtRules = (L) => L.map((r, i) => (i + 1) + '. ' + r).join('\n');
 const BASE_RULES = fmtRules(BASE_ITEMS);
-const DEFAULT_RULES = fmtRules(BASE_ITEMS.concat(EXTRA_ITEMS));
+const PREV_RULES = fmtRules(BASE_ITEMS.concat(EXTRA_ITEMS));
+const DEFAULT_RULES = fmtRules(BASE_ITEMS.concat(EXTRA_ITEMS, EXTRA2_ITEMS));
 
 const DEFAULT_SETTINGS = {
   clinic: { name: 'Tên phòng khám', address: '', phone: '', doctor: '', license: '', logo: '', note: '' },
@@ -47,7 +51,7 @@ const DEFAULT_SETTINGS = {
 
 function readJson(file, fallback) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { return fallback; } }
 function writeJson(file, data) { fs.mkdirSync(path.dirname(file), { recursive: true }); const tmp = file + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(data)); fs.renameSync(tmp, file); }
-function settings() { const s = readJson(SETTINGS_FILE(), {}); if (s.ai && (!s.ai.rules || s.ai.rules === OLD_RULES || s.ai.rules === BASE_RULES)) s.ai.rules = DEFAULT_RULES; return { clinic: Object.assign({}, DEFAULT_SETTINGS.clinic, s.clinic), ai: Object.assign({}, DEFAULT_SETTINGS.ai, s.ai), update: Object.assign({}, DEFAULT_SETTINGS.update, s.update) }; }
+function settings() { const s = readJson(SETTINGS_FILE(), {}); if (s.ai && (!s.ai.rules || s.ai.rules === OLD_RULES || s.ai.rules === BASE_RULES || s.ai.rules === PREV_RULES)) s.ai.rules = DEFAULT_RULES; return { clinic: Object.assign({}, DEFAULT_SETTINGS.clinic, s.clinic), ai: Object.assign({}, DEFAULT_SETTINGS.ai, s.ai), update: Object.assign({}, DEFAULT_SETTINGS.update, s.update) }; }
 function apiKey() {
   try { const b = fs.readFileSync(KEY_FILE()); if (b.slice(0, 4).toString() === 'RAW:') return Buffer.from(b.slice(4).toString(), 'base64').toString('utf8'); return safeStorage.decryptString(b); } catch (e) { return ''; }
 }
