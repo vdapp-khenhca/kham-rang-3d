@@ -19,7 +19,7 @@ const OLD_RULES = [
   'Trả về đúng JSON theo yêu cầu, không thêm văn bản ngoài JSON.'
 ].map((r, i) => (i + 1) + '. ' + r).join('\n');
 
-const DEFAULT_RULES = [
+const BASE_ITEMS = [
   'VAI TRÒ: bạn là bác sĩ chuyên khoa Răng Hàm Mặt có kinh nghiệm lâm sàng (nha tổng quát, nội nha, nha chu, phục hình, phẫu thuật miệng, chỉnh nha, cắn khớp), hỗ trợ bác sĩ của phòng khám đọc scan 3D trong miệng và ảnh X-quang. Bác sĩ trực tiếp khám luôn là người quyết định cuối cùng.',
   'NGUYÊN TẮC TRUNG THỰC: chỉ ghi điều NHÌN THẤY trên dữ liệu được đưa. Không bịa, không suy diễn quá mức. Scan bề mặt không thấy được kẽ răng, dưới nướu, dưới mão, tủy, chân răng, xương: các vấn đề này chỉ ghi là "cần X-quang hoặc khám trực tiếp". Dùng "có thể", "nghi ngờ"; không khẳng định chẩn đoán. Chỗ không chắc phải ghi rõ trong mục cần bác sĩ xác nhận.',
   'KÝ HIỆU: dùng FDI (hàm trên phải 18-11, trái 21-28; hàm dưới trái 38-31, phải 41-48), trái/phải là của BỆNH NHÂN. Luôn đối chiếu hình thái răng với số răng được gán (cửa, nanh, tiền hàm 2 múi, hàm lớn 3-5 múi, răng khôn) và báo ngay nếu thấy không khớp.',
@@ -29,7 +29,15 @@ const DEFAULT_RULES = [
   'CHỖ CẦN X-QUANG: sâu kẽ và sâu dưới mão, tình trạng tủy và vùng quanh chóp, mức tiêu xương, chân răng, răng ngầm, xoang hàm. Khi đọc phim, nêu vị trí theo FDI và ghi rõ chất lượng phim nếu khó đọc.',
   'VĂN PHONG: nội dung dành cho khách phải dễ hiểu, trung lập, nêu khuyến nghị cụ thể và rủi ro tương lai. Không nhắc giá, không ưu đãi, không thúc ép, không dọa. Nội dung cho bác sĩ thì ngắn gọn, đúng thuật ngữ chuyên môn.',
   'ĐỊNH DẠNG: trả về đúng JSON theo yêu cầu, tiếng Việt, không thêm văn bản ngoài JSON.'
-].map((r, i) => (i + 1) + '. ' + r).join('\n');
+];
+const EXTRA_ITEMS = [
+  'THỨ TỰ PHÂN TÍCH KẾT HỢP: CT (hoặc X-quang) là nguồn chính để biết răng nào có, mất, ngầm, số chân, tủy, quanh chóp, xương; scan 3D là nguồn chính để biết bề mặt thân răng, nướu, khớp cắn, phục hình. Khi hai nguồn khớp nhau thì nêu rõ có cả hai nguồn; khi mâu thuẫn thì ghi vào review, không tự chọn một bên.',
+  'ĐỊNH DANH RĂNG: kiểm đếm theo từng góc phần tư từ đường giữa ra ngoài, nhận biết răng cửa 1, cửa 2, nanh, hai tiền hàm, hai hoặc ba răng hàm lớn; răng khôn thường nhỏ, lệch, có thể ngầm. Không bỏ sót ô trống: ô nào không có răng phải ghi là mất, ngầm hoặc chưa mọc, không dồn số.',
+  'KẾ HOẠCH ĐIỀU TRỊ: phân nhóm cần làm ngay, nên làm trong 1-3 tháng, có thể cân nhắc sau. Mỗi mục nêu căn cứ, kết quả mong đợi, nguy cơ nếu không làm (dùng "có thể"), thời điểm làm tiếp, số lần hẹn. Thứ tự: đau và nhiễm trùng, nha chu, bảo tồn, nội nha, phẫu thuật, phục hình, cấy ghép, chỉnh nha, thẩm mỹ.'
+];
+const fmtRules = (L) => L.map((r, i) => (i + 1) + '. ' + r).join('\n');
+const BASE_RULES = fmtRules(BASE_ITEMS);
+const DEFAULT_RULES = fmtRules(BASE_ITEMS.concat(EXTRA_ITEMS));
 
 const DEFAULT_SETTINGS = {
   clinic: { name: 'Tên phòng khám', address: '', phone: '', doctor: '', license: '', logo: '', note: '' },
@@ -39,7 +47,7 @@ const DEFAULT_SETTINGS = {
 
 function readJson(file, fallback) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { return fallback; } }
 function writeJson(file, data) { fs.mkdirSync(path.dirname(file), { recursive: true }); const tmp = file + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(data)); fs.renameSync(tmp, file); }
-function settings() { const s = readJson(SETTINGS_FILE(), {}); if (s.ai && (!s.ai.rules || s.ai.rules === OLD_RULES)) s.ai.rules = DEFAULT_RULES; return { clinic: Object.assign({}, DEFAULT_SETTINGS.clinic, s.clinic), ai: Object.assign({}, DEFAULT_SETTINGS.ai, s.ai), update: Object.assign({}, DEFAULT_SETTINGS.update, s.update) }; }
+function settings() { const s = readJson(SETTINGS_FILE(), {}); if (s.ai && (!s.ai.rules || s.ai.rules === OLD_RULES || s.ai.rules === BASE_RULES)) s.ai.rules = DEFAULT_RULES; return { clinic: Object.assign({}, DEFAULT_SETTINGS.clinic, s.clinic), ai: Object.assign({}, DEFAULT_SETTINGS.ai, s.ai), update: Object.assign({}, DEFAULT_SETTINGS.update, s.update) }; }
 function apiKey() {
   try { const b = fs.readFileSync(KEY_FILE()); if (b.slice(0, 4).toString() === 'RAW:') return Buffer.from(b.slice(4).toString(), 'base64').toString('utf8'); return safeStorage.decryptString(b); } catch (e) { return ''; }
 }
@@ -107,15 +115,23 @@ ipcMain.handle('settings:setKey', (e, key) => {
 });
 async function openai(pathname, init) {
   const key = apiKey(); if (!key) throw new Error('Chưa nhập khóa API OpenAI. Vào Cài đặt để nhập.');
-  const r = await fetch('https://api.openai.com' + pathname, Object.assign({}, init, { headers: Object.assign({ Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' }, init && init.headers) }));
-  const text = await r.text(); let j = null; try { j = JSON.parse(text); } catch (e) {}
-  if (!r.ok) {
+  let lastErr = null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    if (attempt) await new Promise((r) => setTimeout(r, 1500 * Math.pow(2, attempt - 1)));
+    let r, text;
+    try {
+      r = await fetch('https://api.openai.com' + pathname, Object.assign({}, init, { headers: Object.assign({ Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' }, init && init.headers) }));
+      text = await r.text();
+    } catch (e) { lastErr = new Error('Không kết nối được OpenAI: ' + (e && e.message || e)); continue; }
+    let j = null; try { j = JSON.parse(text); } catch (e) {}
+    if (r.ok) return j;
     const m = (j && j.error && j.error.message) || text.slice(0, 200);
     if (r.status === 401) throw new Error('Khóa API không đúng hoặc đã bị thu hồi.');
-    if (r.status === 429) throw new Error('OpenAI báo quá giới hạn hoặc hết hạn mức: ' + m);
-    throw new Error('OpenAI trả lỗi ' + r.status + ': ' + m);
+    if (r.status === 429 && /quota|billing|insufficient/i.test(m)) throw new Error('OpenAI báo hết hạn mức: ' + m);
+    lastErr = new Error(r.status === 429 ? 'OpenAI báo quá giới hạn tốc độ: ' + m : 'OpenAI trả lỗi ' + r.status + ': ' + m);
+    if (r.status !== 429 && r.status < 500) throw lastErr;
   }
-  return j;
+  throw lastErr || new Error('OpenAI không phản hồi.');
 }
 ipcMain.handle('ai:models', async () => { const j = await openai('/v1/models', { method: 'GET' }); return (j.data || []).map((m) => m.id).filter((id) => /^(gpt|o\d|chatgpt)/.test(id)).sort(); });
 ipcMain.handle('ai:run', async (e, { prompt, images }) => {

@@ -410,9 +410,15 @@
     else if (k === 'manual') { sc.manual = sc.jaw; if (sc.resolve) sc.resolve(); }
     else if (k === 'ok') { sc.confirmed = true; if (sc.resolve) sc.resolve(); }
   });
+  function invOf() {
+    const iv = S.C && S.C.ct && S.C.ct.inventory; if (!iv) return null;
+    const ok = (a) => (Array.isArray(a) ? a.map(Number).filter((f) => ORDER.indexOf(f) >= 0) : []), co = ok(iv.co), mat = ok(iv.mat).concat(ok(iv.ngam));
+    if (co.length + mat.length < 20 || co.length < 6) return null;
+    return { present: new Set(co), absent: new Set(mat.filter((f) => co.indexOf(f) < 0)) };
+  }
   async function detectJaw(jn) {
     const J = S.jaws[jn]; S.scan.phase = 'detect'; S.scan.jaw = jn; renderHud(); viewJawOnly(jn); J.sweep = null; J.seeds = []; J.grid = null; J.vlab = null; recompute(J); buildLabels(); await sleep(350);
-    const r = window.detectTeeth(J, jn, THREE);
+    const r = window.detectTeeth(J, jn, THREE, invOf());
     if (!r || r.seeds.length < 4) { S.scan.warn.push('Không nhận diện được ' + (jn === 'upper' ? 'hàm trên' : 'hàm dưới') + ', hãy bấm "Đánh dấu thủ công" cho hàm này.'); return false; }
     J.grid = r.grid; J.vlab = r.vlab || null;     J.sweep = r.sweep; J.seeds = r.seeds.map((q) => ({ f: q.f, p: q.p, h: q.h, show: false }));
     S.C.marks.missing = S.C.marks.missing.filter((x) => jawOf(x) !== jn).concat(r.missing);
@@ -439,6 +445,8 @@
     S.scan = { busy: true, phase: 'detect', jaw: '', done: 0, total: 0, fail: [], err: '', cur: null, cancel: false, warn: [] }; const sc = S.scan;
     S.tab = 'scan'; S.sel = null; syncTabs(); fxClear(); render(); renderHud();
     try {
+      if (S.hasKey && S.C && S.C.ct && (opts.all || !S.C.ct.result)) { sc.phase = 'ct'; renderHud(); await runCt(true); }
+      if (S.hasKey && !sc.cancel && S.C && S.C.pano && S.pano.url && (opts.all || !S.C.pano.result)) { sc.phase = 'pano'; renderHud(); await runPano(true); }
       for (const jn of ['upper', 'lower']) { if (!S.jaws[jn] || sc.cancel || !S.C) continue; if (opts.redetect || opts.only === jn || !S.jaws[jn].seeds.length) { if (!opts.only || opts.only === jn) await detectJaw(jn); } }
       let fresh = ['upper', 'lower'].filter((jn) => S.jaws[jn] && S.C.detect && S.C.detect[jn] && S.C.detect[jn].auto && !S.C.detect[jn].confirmed);
       while (fresh.length && !sc.cancel && S.C) {
@@ -453,8 +461,6 @@
         const plan = {}; let total = 0;
         for (const jn of ['upper', 'lower']) { const J = S.jaws[jn]; if (!J || !J.seeds.length) { plan[jn] = []; continue; } let list = J.seeds.map((q) => q.f).filter((f) => !isMissing(f)).sort((a, b) => ordOf(a) - ordOf(b)); if (!opts.all) list = list.filter((f) => !teethLog(f).some((e) => e.kind === 'ai' && !e.src)); plan[jn] = list; total += list.length; }
         sc.total = total;
-        if (!sc.cancel && S.C && S.C.pano && S.pano.url && (opts.all || !S.C.pano.result)) { sc.phase = 'pano'; renderHud(); await runPano(true); }
-        if (!sc.cancel && S.C && S.C.ct && (opts.all || !S.C.ct.result)) { sc.phase = 'ct'; renderHud(); await runCt(true); }
         for (const jn of ['upper', 'lower']) {
           const list = plan[jn]; if (!list || !list.length || sc.cancel || !S.C) continue; sc.phase = 'ai'; sc.jaw = jn; viewJawOnly(jn); renderHud(); await sleep(300);
           let i = 0; const worker = async () => { while (i < list.length && !sc.cancel && S.C) { const f = list[i++]; await scanOne(f); await sleep(120); } };
@@ -512,12 +518,14 @@
         '4) Cấu trúc giải phẫu: xoang hàm (dày niêm mạc, mờ, polyp, đáy xoang liên quan chóp răng trên), ống răng dưới (đường đi, khoảng cách tới chóp răng cần can thiệp), lỗ cằm, vách ngăn mũi, khớp thái dương hàm (lồi cầu, ổ chảo), đường thở nếu thấy, xương hàm: nang, u, tổn thương thấu quang hay cản quang, vôi hóa.\n' +
         '5) Đối chiếu với scan 3D: răng nào scan ghi có mà CT không thấy (hoặc ngược lại) thì ghi vào "mismatch".\n' +
         'Dịch vụ đề xuất chọn từ: ' + CATALOG.join('; ') + ' (có thể thêm tên ngắn gọn); chỉ khi có căn cứ trên CT; priority "cao" khi cần xử lý sớm (thấu quang quanh chóp, nang, răng ngầm gây biến chứng, nhiễm trùng nghi ngờ).\n' +
-        'Trả về JSON: {"quality":"chất lượng ảnh, nhiễu do kim loại, phần chưa đọc được","summary":"3-6 câu tổng quan","teeth":[{"f":36,"status":"co|mat|implant|ngam|chan_sot","text":"nhận định ngắn cho răng này","services":[{"name":"...","priority":"cao|trung bình|thấp","why":"1 câu","when":"ngay|1-3 tháng|sau 6 tháng|theo dõi","outcome":"kết quả mong đợi","risk":"nguy cơ nếu không làm"}]}],"sections":{"xuong_nha_chu":"...","xoang_ham":"...","ong_rang_duoi":"...","khop_thai_duong_ham":"...","bat_thuong_khac":"..."},"general":["điều chung cần lưu ý"],"mismatch":["đối chiếu với scan 3D"],"review":["điều cần bác sĩ xác nhận trực tiếp trên phần mềm CT, đo đạc cần làm"]}. Chỉ liệt kê trong "teeth" các răng có điều đáng ghi hoặc trạng thái đặc biệt. Viết tiếng Việt.';
+        'KIỂM ĐẾM BẮT BUỘC: đi lần lượt từng góc phần tư (18-11, 21-28, 38-31, 41-48) trên ảnh toàn cảnh, từ đường giữa ra ngoài, và ghi mọi vị trí 11-48 vào inventory: co (răng đang có, kể cả implant và chân răng sót), mat (vị trí không có răng), ngam (răng ngầm hoặc chưa mọc, không thấy trong miệng). Mỗi số chỉ nằm ở MỘT nhóm. Chỉ liệt kê răng chắc chắn; răng không rõ thì bỏ khỏi cả ba nhóm.\n' +
+        'Trả về JSON: {"quality":"chất lượng ảnh, nhiễu do kim loại, phần chưa đọc được","summary":"3-6 câu tổng quan","inventory":{"co":[],"mat":[],"ngam":[]},"teeth":[{"f":36,"status":"co|mat|implant|ngam|chan_sot","text":"nhận định ngắn cho răng này","services":[{"name":"...","priority":"cao|trung bình|thấp","why":"1 câu","when":"ngay|1-3 tháng|sau 6 tháng|theo dõi","outcome":"kết quả mong đợi","risk":"nguy cơ nếu không làm"}]}],"sections":{"xuong_nha_chu":"...","xoang_ham":"...","ong_rang_duoi":"...","khop_thai_duong_ham":"...","bat_thuong_khac":"..."},"general":["điều chung cần lưu ý"],"mismatch":["đối chiếu với scan 3D"],"review":["điều cần bác sĩ xác nhận trực tiếp trên phần mềm CT, đo đạc cần làm"]}. Chỉ liệt kê trong "teeth" các răng có điều đáng ghi hoặc trạng thái đặc biệt. Viết tiếng Việt.';
       const res = await window.api.ai.run({ prompt, images: shots });
       const finds = (res.teeth || []).filter((x) => ORDER.indexOf(+x.f) >= 0).slice(0, 32), date = todayIso(), sec = res.sections && typeof res.sections === 'object' ? res.sections : {};
       const lbl = { xuong_nha_chu: 'Xương và nha chu', xoang_ham: 'Xoang hàm', ong_rang_duoi: 'Ống răng dưới', khop_thai_duong_ham: 'Khớp thái dương hàm', bat_thuong_khac: 'Bất thường khác' };
       const secs = Object.keys(lbl).map((k) => (sec[k] && String(sec[k]).trim() ? { k: lbl[k], v: String(sec[k]).trim() } : null)).filter(Boolean);
       const rv = (res.review || []).slice(0, 6).map(String); (res.mismatch || []).slice(0, 6).reverse().forEach((x) => rv.unshift('⚠ Đối chiếu scan 3D: ' + x));
+      if (res.inventory && typeof res.inventory === 'object') c.inventory = { co: res.inventory.co || [], mat: res.inventory.mat || [], ngam: res.inventory.ngam || [] };
       c.result = { quality: String(res.quality || ''), summary: String(res.summary || ''), general: (res.general || []).slice(0, 8).map(String), sections: secs, review: rv, count: finds.length, date };
       finds.forEach((x) => { const f = +x.f, log = (S.C.teeth[f] = (S.C.teeth[f] || []).filter((e) => !(e.kind === 'ai' && e.src === 'ct'))); log.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 5), kind: 'ai', src: 'ct', who: 'AI (GPT) · CT 3D', date, ai: { observations: [String(x.text || '')].filter(Boolean), impression: String(x.text || ''), services: (x.services || []).slice(0, 5), review: [] } }); });
       persist(); repaintAll(); if (!quiet) toast('Đã đọc xong CT');
@@ -1097,5 +1105,5 @@
     const r = await window.api.settings.get(); S.cfg = r.settings; S.hasKey = r.hasKey; S.version = r.version; S.dataPath = r.dataPath; S.packaged = r.packaged;
     $('ver').textContent = 'v' + r.version; show('home');
   })();
-  window.__app = { runScan, FX, flyTo, flipJaw, setHover, setPin, toggleDone, recompute, repaintAll, buildLabels, setView, fitAll, camera, controls, S, importFiles, openCase, placeSeed, startMark, select, render, exportPdf, THREE, jawShot, toothImages };
+  window.__app = { runScan, FX, flyTo, flipJaw, setHover, setPin, toggleDone, recompute, repaintAll, buildLabels, setView, fitAll, camera, controls, S, importFiles, openCase, placeSeed, startMark, select, render, exportPdf, detectJaw, THREE, jawShot, toothImages };
 })();

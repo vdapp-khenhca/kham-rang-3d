@@ -68,7 +68,7 @@
     }
     return lab;
   }
-  window.detectTeeth = function (J, jaw, THREE) {
+  window.detectTeeth = function (J, jaw, THREE, inv) {
     const N = J.crown.length, P = J.geo.getAttribute('position').array, U = J.U, V = J.V, H = J.H, crown = J.crown, sg = J.occ.dot(J.n) >= 0 ? 1 : -1;
     let u0 = 1e9, u1 = -1e9, v0 = 1e9, v1 = -1e9, nc = 0; for (let i = 0; i < N; i++) if (crown[i]) { nc++; if (U[i] < u0) u0 = U[i]; if (U[i] > u1) u1 = U[i]; if (V[i] < v0) v0 = V[i]; if (V[i] > v1) v1 = V[i]; }
     if (nc < 1500) return null; u0 -= 2; v0 -= 2; const W = Math.ceil((u1 - u0 + 2) / R) + 1, Hh = Math.ceil((v1 - v0 + 2) / R) + 1, G = W * Hh;
@@ -106,11 +106,12 @@
     const ru = right.dot(J.e1), rv = right.dot(J.e2), aIsRight = (sideA.length ? (sideA[0].cu - mu) * ru + (sideA[0].cv - mv) * rv : 0) > 0;
 
     /* 3. gán số bằng quy hoạch động */
-    function solve(side, kap) {
+    function solve(side, kap, base0) {
+      const ms = (q) => { const F = base0 + q; if (inv && inv.absent.has(F)) return 0.08; if (inv && inv.present.has(F)) return 3.2; return MISS[q - 1]; }, ap = (i) => (inv && inv.absent.has(base0 + i + 1) ? 2.2 : 0);
       const n = side.length, S = []; let acc = 0; const Wd = WIDTH[jaw]; for (let i = 0; i < 8; i++) { S.push((acc + Wd[i] / 2) * kap); acc += Wd[i]; }
       const sj = []; let prev = { cu: mu, cv: mv }, run = 0; side.forEach((o, j) => { run += Math.hypot(o.cu - prev.cu, o.cv - prev.cv); sj.push(run); prev = o; });
       const Ea = AREA[jaw].map((x) => x * kap * kap), INF = 1e9, f = [], bk = [];
-      const mc = (j, i, ar) => 1.0 * Math.abs(Math.log(ar / Ea[i])) + 0.9 * Math.pow((sj[j] - S[i]) / 3.5, 2);
+      const mc = (j, i, ar) => 1.0 * Math.abs(Math.log(ar / Ea[i])) + 0.9 * Math.pow((sj[j] - S[i]) / 3.5, 2) + ap(i);
       for (let j = 0; j <= n; j++) { f.push(new Float64Array(10).fill(INF)); bk.push(new Array(10).fill(null)); } // f[j][i]: đã xử lý j cụm, răng cuối đã gán là i (0 = chưa có)
       f[0][0] = 0;
       for (let j = 0; j < n; j++) for (let i = 0; i <= 8; i++) {
@@ -118,23 +119,23 @@
         // bỏ cụm này (nhiễu)
         if (base + 1.6 < f[j + 1][i]) { f[j + 1][i] = base + 1.6; bk[j + 1][i] = [i, 0, 0]; }
         for (let t = i + 1; t <= 8; t++) {
-          let sk = 0; for (let q = i + 1; q < t; q++) sk += MISS[q - 1];
+          let sk = 0; for (let q = i + 1; q < t; q++) sk += ms(q);
           const c1 = base + sk + mc(j, t - 1, side[j].area);
           if (c1 < f[j + 1][t]) { f[j + 1][t] = c1; bk[j + 1][t] = [i, 1, 0]; }
           if (t >= i + 2 && side[j].area > 1.5 * Math.min(Ea[t - 2], Ea[t - 1])) { // một cụm = hai răng dính nhau
-            let sk2 = 0; for (let q = i + 1; q < t - 1; q++) sk2 += MISS[q - 1];
+            let sk2 = 0; for (let q = i + 1; q < t - 1; q++) sk2 += ms(q);
             const half = side[j].area / 2, c2 = base + sk2 + 0.35 + 0.5 * (Math.abs(Math.log(half / Ea[t - 2])) + Math.abs(Math.log(half / Ea[t - 1]))) + 0.9 * Math.pow((sj[j] - (S[t - 2] + S[t - 1]) / 2) / 3.5, 2);
             if (c2 < f[j + 1][t]) { f[j + 1][t] = c2; bk[j + 1][t] = [i, 2, 0]; }
           }
         }
       }
-      let best = INF, bi = 0; for (let i = 0; i <= 8; i++) { let tail = 0; for (let q = i + 1; q <= 8; q++) tail += MISS[q - 1]; const c = f[n][i] + tail; if (c < best) { best = c; bi = i; } }
+      let best = INF, bi = 0; for (let i = 0; i <= 8; i++) { let tail = 0; for (let q = i + 1; q <= 8; q++) tail += ms(q); const c = f[n][i] + tail; if (c < best) { best = c; bi = i; } }
       if (best >= INF) return null;
       const out = []; let j = n, i = bi; while (j > 0) { const [pi, kind] = bk[j][i]; if (kind === 1) out.push({ blob: side[j - 1], slots: [i] }); else if (kind === 2) out.push({ blob: side[j - 1], slots: [i - 1, i] }); j--; i = pi; }
       return { out: out.reverse(), cost: best };
     }
     let bestR = null;
-    for (const kap of [0.8, 0.9, 1.0, 1.1, 1.2, 1.35]) { const a = solve(sideA, kap), b = solve(sideB, kap); if (!a || !b) continue; const tot = a.cost + b.cost + 1.2 * Math.abs(Math.log(kap)); if (!bestR || tot < bestR.tot) bestR = { a, b, tot, kap }; }
+    for (const kap of [0.8, 0.9, 1.0, 1.1, 1.2, 1.35]) { const bR = jaw === 'upper' ? 10 : 40, bL = jaw === 'upper' ? 20 : 30, a = solve(sideA, kap, aIsRight ? bR : bL), b = solve(sideB, kap, aIsRight ? bL : bR); if (!a || !b) continue; const tot = a.cost + b.cost + 1.2 * Math.abs(Math.log(kap)); if (!bestR || tot < bestR.tot) bestR = { a, b, tot, kap }; }
     if (!bestR) return null;
 
     /* 4. nhãn từng ô: tooth = FDI */
