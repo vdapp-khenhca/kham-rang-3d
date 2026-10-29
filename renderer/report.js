@@ -32,12 +32,11 @@
   window.buildReport = function (c) {
     const p = c.patient, cl = c.clinic;
     const kv = (k, v) => '<tr><th>' + k + '</th><td>' + (v ? esc(v) : '<span class="dim">—</span>') + '</td></tr>';
-    const rows = c.teethRows.map((r) => '<tr><td class="num">' + r.f + '</td><td>' + (r.note ? nl(r.note) : '<span class="dim">—</span>') + '</td><td>' +
-      (r.done.length ? r.done.map((d) => esc(d.name) + '<div class="sub">' + fmt(d.date) + (d.who ? ' · ' + esc(d.who) : '') + '</div>').join('') : '<span class="dim">—</span>') + '</td><td>' +
-      (r.todo.length ? r.todo.map((d) => esc(d.name) + (d.note ? '<div class="sub">' + esc(d.note) + '</div>' : '')).join('') : '<span class="dim">—</span>') + '</td></tr>').join('');
     const li = (arr) => arr.length ? '<ul>' + arr.map((x) => '<li>' + esc(x) + '</li>').join('') + '</ul>' : '<p class="dim">Không có nội dung.</p>';
     const PG = { now: 'Cần làm ngay', soon: 'Nên làm trong 1–3 tháng', later: 'Có thể cân nhắc sau' };
-    const plan = (c.plan || []).length ? ['now', 'soon', 'later'].map((g) => { const L = c.plan.filter((x) => x.group === g); return L.length ? '<h3 style="margin:8pt 0 3pt;font-size:10pt">' + PG[g] + '</h3><table class="grid"><thead><tr><th style="width:8%">Răng</th><th style="width:18%">Việc cần làm</th><th style="width:20%">Căn cứ</th><th style="width:18%">Kết quả mong đợi</th><th style="width:20%">Nguy cơ nếu không làm</th><th style="width:16%">Thời gian dự kiến</th></tr></thead><tbody>' + L.map((x) => '<tr><td class="num">' + esc(x.teeth || '') + '</td><td>' + esc(x.title) + '</td><td>' + esc(x.why) + '</td><td>' + esc(x.outcome) + '</td><td>' + esc(x.risk) + '</td><td>' + esc([x.when, x.visits].filter(Boolean).join('. ')) + '</td></tr>').join('') + '</tbody></table>' : ''; }).join('') : '';
+    const dash = '<span class="dim">—</span>';
+    const prob = (c.problems || []).length ? '<table class="grid"><thead><tr><th style="width:9%">Răng</th><th style="width:45%">Tình trạng</th><th>Rủi ro nếu không xử lý</th></tr></thead><tbody>' + c.problems.map((x) => '<tr><td class="num">' + esc(x.f) + '</td><td>' + (x.tinh_trang ? nl(x.tinh_trang) : dash) + '</td><td>' + (x.rui_ro ? nl(x.rui_ro) : dash) + '</td></tr>').join('') + '</tbody></table>' : '<p class="dim">Không ghi nhận răng nào cần xử lý.</p>';
+    const plan = (c.plan || []).length ? ['now', 'soon', 'later'].map((g) => { const L = c.plan.filter((x) => x.group === g); return L.length ? '<h3 style="margin:8pt 0 3pt;font-size:10pt">' + PG[g] + '</h3><table class="grid"><thead><tr><th style="width:24%">Hạng mục</th><th style="width:14%">Răng</th><th>Kết quả mong đợi</th><th style="width:22%">Thời gian dự kiến</th></tr></thead><tbody>' + L.map((x) => '<tr><td>' + esc(x.title) + '</td><td>' + esc(x.teeth || '') + '</td><td>' + (x.outcome ? nl(x.outcome) : dash) + '</td><td>' + esc([x.when, x.visits].filter(Boolean).join('. ')) + '</td></tr>').join('') + '</tbody></table>' : ''; }).join('') : '<p class="dim">Chưa có hạng mục điều trị.</p>';
     const care = c.care.length ? '<table class="grid"><thead><tr><th style="width:24%">Dự kiến</th><th>Nội dung</th></tr></thead><tbody>' + c.care.map((t) => '<tr><td>' + fmt(t.due) + '</td><td>' + esc(t.title) + '</td></tr>').join('') + '</tbody></table>' : '';
     const shot = (src, cap) => src ? '<figure><img src="' + src + '"><figcaption>' + cap + '</figcaption></figure>' : '';
     return '<!doctype html><html lang="vi"><head><meta charset="utf-8"><title>Phiếu khám ' + esc(p.name) + '</title><style>/*FONTS*/' + `
@@ -81,18 +80,16 @@ figure{margin:0;break-inside:avoid} figure img{width:100%;display:block;border:.
       (p.history ? '<tr><th>Tiền sử, lưu ý</th><td colspan="3">' + nl(p.history) + '</td></tr>' : '') + '</table>' +
 
       '<h2><span>II.</span>Nhận định tổng quan</h2><div class="avoid">' + (c.summary ? '<p>' + nl(c.summary) + '</p>' : '<p class="dim">Chưa có nhận định.</p>') + '</div>' +
-      '<div class="counts avoid"><div><b>' + c.counts.examined + '</b><span>Răng đã ghi nhận</span></div><div><b>' + c.counts.done + '</b><span>Hạng mục đã thực hiện</span></div><div><b>' + c.counts.todo + '</b><span>Hạng mục cần thực hiện hoặc theo dõi</span></div><div><b>' + c.counts.missing + '</b><span>Răng đã mất</span></div></div>' +
-
-      '<h2><span>III.</span>Hình ảnh scan 3D trong miệng</h2><div class="shots">' + shot(c.shots.upper, 'Hàm trên, nhìn từ mặt nhai') + shot(c.shots.lower, 'Hàm dưới, nhìn từ mặt nhai') + '</div>' +
+      ((c.shots.upper || c.shots.lower) ? '<h2><span>III.</span>Hình ảnh scan 3D trong miệng</h2><div class="shots">' + shot(c.shots.upper, 'Hàm trên, nhìn từ mặt nhai') + shot(c.shots.lower, 'Hàm dưới, nhìn từ mặt nhai') + '</div>' : '') +
 
       '<h2><span>IV.</span>Sơ đồ răng</h2><div class="avoid">' + chart(c.states) + '<div class="legend"><span>' + legendSvg('done') + 'Đã thực hiện</span><span>' + legendSvg('pend') + 'Cần thực hiện hoặc theo dõi</span><span>' + legendSvg('risk') + 'Cần thực hiện, nên sớm</span><span>' + legendSvg('none') + 'Chưa ghi nhận</span><span>' + legendSvg('missing') + 'Đã mất răng</span></div><div class="legend"><span>Hàng trên: hàm trên (18 đến 28) · Hàng dưới: hàm dưới (48 đến 38). Ký hiệu theo FDI.</span></div></div>' +
 
-      '<h2><span>V.</span>Chi tiết từng răng</h2>' + (rows ? '<table class="grid"><thead><tr><th>Răng</th><th style="width:34%">Nhận xét</th><th style="width:26%">Đã thực hiện</th><th style="width:26%">Cần thực hiện hoặc theo dõi</th></tr></thead><tbody>' + rows + '</tbody></table>' : '<p class="dim">Chưa có ghi nhận theo từng răng.</p>') +
-
-      (plan ? '<h2><span>VI.</span>Kế hoạch điều trị đề xuất</h2>' + plan : '') +
-      '<h2><span>VII.</span>Lời khuyên</h2><div class="avoid">' + li(c.advice) + '</div>' +
-      '<h2><span>VIII.</span>Những điều cần lưu ý trong tương lai</h2><div class="avoid">' + li(c.risks) + '</div>' +
-      (care ? '<h2><span>IX.</span>Lịch tái khám và chăm sóc dự kiến</h2><div class="avoid">' + care + '</div>' : '') +
+      '<h2><span>V.</span>Răng cần chú ý</h2>' + prob +
+      '<h2><span>VI.</span>Hướng điều trị đề xuất</h2>' + plan +
+      (c.doctor ? '<h2><span>VII.</span>Ý kiến bổ sung của bác sĩ</h2><div class="avoid"><p>' + nl(c.doctor) + '</p></div>' : '') +
+      '<h2><span>VIII.</span>Lời khuyên</h2><div class="avoid">' + li(c.advice) + '</div>' +
+      '<h2><span>IX.</span>Những điều cần lưu ý trong tương lai</h2><div class="avoid">' + li(c.risks) + '</div>' +
+      (care ? '<h2><span>X.</span>Lịch tái khám và chăm sóc dự kiến</h2><div class="avoid">' + care + '</div>' : '') +
       '<div class="sign"><div>Ngày ' + fmt(p.visitDate) + '<br><b>Bác sĩ khám</b><div class="line"></div>' + esc(p.doctor || cl.doctor || '') + (cl.license ? '<br><span class="dim">CCHN: ' + esc(cl.license) + '</span>' : '') + '</div></div>' +
       '<div class="note">' + esc(cl.note || 'Phiếu này tổng hợp kết quả khám và hình ảnh scan tại thời điểm lập, không thay thế chỉ định điều trị của bác sĩ. Nếu có thắc mắc hoặc thấy răng miệng có thay đổi, xin liên hệ phòng khám để được hỗ trợ.') + '</div>' +
       '</body></html>';

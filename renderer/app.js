@@ -151,9 +151,9 @@
   function stateOf(f) {
     if (isMissing(f)) return 'missing';
     const m = svcMap(f); if (!m.size) return 'none';
-    let pend = false, risk = false;
-    m.forEach((s) => { if (!s.done.length) { pend = true; if (s.ai && s.ai.priority === 'cao') risk = true; } });
-    return risk ? 'risk' : pend ? 'pend' : 'done';
+    let pend = false, risk = false, dn = false;
+    m.forEach((s) => { if (s.done.length) { dn = true; return; } if (s.ai && (s.ai.priority === 'thấp' || /theo dõi|định kỳ|vệ sinh/i.test(s.name))) return; pend = true; if (s.ai && s.ai.priority === 'cao') risk = true; });
+    return risk ? 'risk' : pend ? 'pend' : dn ? 'done' : 'none';
   }
   const tmpc = new THREE.Color();
   const mixc = new THREE.Color();
@@ -275,14 +275,14 @@
     if (k === 'done') stopMark();
   });
   $('guide').addEventListener('change', (e) => { if (e.target.id === 'gsel' && S.mark) { S.mark.idx = +e.target.value; markGuide(); } });
-  $('aiAll').onclick = () => runCombined();
+  $('aiAll').onclick = () => runAnalyze();
   $('markU').onclick = () => startMark('upper'); $('markL').onclick = () => startMark('lower');
 
   function addLog(f, entry) { const log = (S.C.teeth[f] = (S.C.teeth[f] || []).slice()); entry.id = Date.now().toString(36) + Math.random().toString(36).slice(2, 5); log.push(entry); persist(); repaintAll(); render(); }
   function delLog(f, id) { S.C.teeth[f] = teethLog(f).filter((e) => e.id !== id); persist(); repaintAll(); render(); }
   function toothDirs(J, s) { const out = s.p.clone().sub(J.center); out.addScaledVector(J.n, -out.dot(J.n)); if (out.lengthSq() < 1e-6) out.copy(J.e1); out.normalize(); return { occ: J.occ.clone().normalize(), out }; }
   function select(f) {
-    S.sel = f; if (['scan', 'care', 'todo'].indexOf(S.tab) < 0) S.tab = 'exam'; S.form.svc = ''; syncTabs();
+    S.sel = f; S.form.svc = ''; syncTabs();
     const J = S.jaws[jawOf(f)], s = J && J.seeds.find((x) => x.f === f);
     if (J && !S.mark && S.tab === 'exam') { Object.values(S.jaws).forEach((j) => (j.mesh.visible = j === J)); $('vU').checked = !!(S.jaws.upper && S.jaws.upper.mesh.visible); $('vL').checked = !!(S.jaws.lower && S.jaws.lower.mesh.visible); }
     if (s) { const d = camera.position.clone().sub(controls.target); d.setLength(Math.min(d.length(), Math.max(45, S.radius * 1.1))); const J2 = S.jaws[jawOf(f)]; if (J2 && !J2.mesh.visible) { J2.mesh.visible = true; $('vU').checked = !!(S.jaws.upper && S.jaws.upper.mesh.visible); $('vL').checked = !!(S.jaws.lower && S.jaws.lower.mesh.visible); } flyTo(s.p.clone().add(offOf(J2 || J)), d, d.length(), 600); }
@@ -583,55 +583,144 @@
       persist(); repaintAll(); if (!quiet) toast('Đã đọc xong phim X-quang');
     } catch (e) { S.pano.err = cleanErr(e); } finally { S.pano.busy = false; if (!quiet) render(); }
   }
+  const STL = { done: ['Đã làm', 'done'], pend: ['Chưa làm', 'pend'], risk: ['Chưa làm, nên sớm', 'risk'], none: ['Chưa có dữ liệu', 'none'], missing: ['Đã mất răng', 'none'] };
+  const jawName = (jn) => (jn === 'upper' ? 'hàm trên' : 'hàm dưới');
+  const allSeeds = () => { const o = []; Object.values(S.jaws).forEach((J) => J.seeds.forEach((q) => o.push(q.f))); return o.sort((a, b) => ordOf(a) - ordOf(b)); };
+  const hasSeed = (f) => !!(S.jaws[jawOf(f)] && S.jaws[jawOf(f)].seeds.some((q) => q.f === f));
   const GRP = { now: 'Cần làm ngay', soon: 'Nên làm trong 1–3 tháng', later: 'Có thể cân nhắc sau' };
-  async function runCombined() {
-    if (!S.C || S.scan.busy) return;
-    const all = !!(S.C.plan && S.C.plan.items && S.C.plan.items.length);
-    if (Object.keys(S.jaws).length) { runScan({ all }); return; }
-    if (!S.hasKey) { toast('Chưa có khóa API. Vào Cài đặt để nhập khóa OpenAI.'); return; }
-    const sc = S.scan; sc.busy = true; sc.err = ''; sc.warn = []; sc.fail = [];
-    try {
-      if (S.C.pano && S.pano.url) { sc.phase = 'pano'; render(); await runPano(true); }
-      if (S.C.ct) { sc.phase = 'ct'; render(); await runCt(true); }
-      sc.phase = 'report'; render(); await runPlan(true);
-    } catch (e) { sc.err = cleanErr(e); } finally { sc.busy = false; sc.phase = ''; render(); }
+  const WISDOM = [18, 28, 38, 48];
+  const trivial = (n) => /theo dõi|định kỳ|vệ sinh/i.test(n || '');
+  function problemTeeth() {
+    const set = new Set();
+    Object.keys(S.C.teeth || {}).map(Number).forEach((f) => { svcMap(f).forEach((o) => { if (!o.done.length && o.ai && !trivial(o.name) && o.ai.priority !== 'thấp') set.add(f); }); });
+    return set;
+  }
+  async function screenScan() {
+    const jns = ['upper', 'lower'].filter((jn) => S.jaws[jn] && S.jaws[jn].seeds.length); if (!jns.length) return [];
+    const ctx = [S.C.ct && S.C.ct.result && S.C.ct.result.summary ? 'CT: ' + S.C.ct.result.summary : '', S.C.pano && S.C.pano.result && S.C.pano.result.summary ? 'X-quang: ' + S.C.pano.result.summary : ''].filter(Boolean).join(' | ');
+    const prompt = 'Ảnh scan 3D trong miệng nhìn từ mặt nhai (' + jns.map((j) => (j === 'upper' ? 'hàm trên' : 'hàm dưới')).join(', ') + '), số FDI trong vòng tròn trắng. ' + (ctx ? 'Kết quả đọc phim: ' + ctx + '. ' : '') + 'Chỉ liệt kê những răng CÓ DẤU HIỆU TỔN HẠI hoặc cần can thiệp nhìn thấy được (sâu, vỡ mẻ, mòn nặng, phục hình hỏng hoặc viền lộ, nướu viêm hoặc tụt, vôi nhiều, xoay lệch gây vấn đề, chân răng sót). Răng bình thường KHÔNG liệt kê. Trả về JSON {"teeth":[{"f":16,"finding":"1 câu"}]}. Tiếng Việt.';
+    const res = await window.api.ai.run({ prompt, images: jns.map((jn) => jawShot(jn)) });
+    return (res.teeth || []).map((x) => +x.f).filter((f) => hasSeed(f));
   }
   async function runPlan(quiet) {
     if (!S.hasKey) { toast('Chưa có khóa API. Vào Cài đặt để nhập khóa OpenAI.'); return; }
     S.rep = { busy: true, err: '' }; if (!quiet) render();
     try {
-      const rows = reportRows(), P = S.C.patient, C = S.C;
-      const data = rows.map((r) => {
-        const m = svcMap(r.f), sv = []; m.forEach((s) => { if (!s.done.length && s.ai) sv.push({ ten: s.name, uu_tien: s.ai.priority, ly_do: s.ai.why, khi: s.ai.when, nguon: s.ai.src || 'scan' }); });
+      const rows = reportRows(), P = S.C.patient, C = S.C, flag = problemTeeth();
+      const data = rows.filter((r) => flag.has(r.f)).map((r) => {
+        const sv = []; svcMap(r.f).forEach((s2) => { if (!s2.done.length && s2.ai && !trivial(s2.name)) sv.push({ ten: s2.name, uu_tien: s2.ai.priority, ly_do: s2.ai.why, nguy_co: s2.ai.risk, khi: s2.ai.when, nguon: s2.ai.src || 'scan' }); });
         return { rang: r.f, nhan_xet: r.note, da_lam: r.done.map((d) => d.name), de_xuat: sv };
       });
-      const prompt = 'Bạn là bác sĩ răng hàm mặt lập KẾ HOẠCH ĐIỀU TRỊ TỔNG HỢP từ dữ liệu đã KẾT HỢP: scan 3D trong miệng (bề mặt) + ' + ((C.ct && C.ct.result) ? 'CT cắt lớp (chân răng, xương, tủy)' : (C.pano && C.pano.result) ? 'X-quang toàn cảnh' : 'không có phim') + '. Không có dữ liệu thì không bịa.\n' +
-        'Khách: năm sinh ' + (P.year || 'không rõ') + ', giới tính ' + (P.gender || 'không rõ') + ', tiền sử: ' + (P.history || 'không ghi') + '.\nRăng đã mất: ' + (C.marks.missing.join(', ') || 'không có') + '.\n' +
-        (C.pano && C.pano.result && C.pano.result.summary ? 'Tổng quan X-quang: ' + C.pano.result.summary + '\n' : '') + (C.ct && C.ct.result && C.ct.result.summary ? 'Tổng quan CT: ' + C.ct.result.summary + '\n' : '') +
-        'Dữ liệu từng răng (JSON): ' + JSON.stringify(data) + '\n' +
-        'YÊU CẦU: gom các việc thành kế hoạch theo thứ tự ưu tiên lâm sàng (cấp cứu/đau/nhiễm trùng và bệnh nha chu trước, rồi bảo tồn, nội nha, phục hình, cấy ghép, chỉnh nha, thẩm mỹ). Gộp các răng cùng thủ thuật vào một mục. Chia 3 nhóm: "now" cần làm ngay, "soon" nên làm trong 1-3 tháng, "later" có thể cân nhắc sau. Mỗi mục có: title (tên thủ thuật), teeth (mảng số răng FDI), why (căn cứ từ scan và phim, nói rõ nguồn nào), outcome (kết quả mong đợi), risk (nguy cơ nếu không làm, dùng "có thể"), when (thời điểm dự kiến làm tiếp, ví dụ "trong 1-2 tuần", "sau 3 tháng"), visits (số lần hẹn và thời gian dự kiến). Giọng trung lập, không giá, không bán hàng, không dọa; điều chưa chắc ghi là cần bác sĩ xác nhận.\n' +
-        'Trả về JSON: {"summary":"tình trạng tổng quát 4-6 câu, nêu cả răng và nha chu/xương","items":[{"group":"now|soon|later","title":"","teeth":[],"why":"","outcome":"","risk":"","when":"","visits":""}],"advice":["3-6 lời khuyên"],"risks":["3-5 điều cần lưu ý nếu trì hoãn"]}. Viết tiếng Việt.';
+      const miss = C.marks.missing.filter((f) => WISDOM.indexOf(f) < 0);
+      const prompt = 'Bạn là bác sĩ răng hàm mặt lập PHÁC ĐỒ TỔNG QUÁT từ dữ liệu đã KẾT HỢP: ' + ((C.ct && C.ct.result) ? 'CT cắt lớp (chân răng, xương, tủy) + ' : '') + ((C.pano && C.pano.result) ? 'X-quang toàn cảnh + ' : '') + 'scan 3D trong miệng (bề mặt). Chỉ nêu răng CÓ VẤN ĐỀ; răng không cần làm gì thì không nhắc. Không có dữ liệu thì không bịa.\n' +
+        'Khách: năm sinh ' + (P.year || 'không rõ') + ', giới tính ' + (P.gender || 'không rõ') + ', tiền sử: ' + (P.history || 'không ghi') + '.\nVị trí mất răng (không tính răng khôn): ' + (miss.join(', ') || 'không có') + '.\n' +
+        (C.ct && C.ct.result && C.ct.result.summary ? 'Tổng quan CT: ' + C.ct.result.summary + '\n' : '') + (C.pano && C.pano.result && C.pano.result.summary ? 'Tổng quan X-quang: ' + C.pano.result.summary + '\n' : '') +
+        'Dữ liệu các răng có vấn đề (JSON): ' + JSON.stringify(data) + '\n' +
+        'YÊU CẦU: (1) summary: tình trạng răng miệng tổng quát 3-5 câu. (2) problems: mỗi răng có vấn đề một dòng: f (số FDI), tinh_trang (nêu rõ bị gì, theo nguồn nào: scan, CT hay X-quang), rui_ro (rủi ro có thể xảy ra nếu không xử lý, dùng "có thể"). (3) items: hướng điều trị theo NHÓM DỊCH VỤ chung, KHÔNG nêu tên hãng hay vật liệu cụ thể; title chọn từ: "Trám răng", "Điều trị tủy", "Bọc răng sứ", "Nhổ răng", "Cấy ghép implant", "Điều trị nha chu", "Cạo vôi, làm sạch", "Chỉnh nha", "Phục hình răng mất", "Điều trị khác". Gộp các răng cùng nhóm và cùng mức khẩn vào một mục. group: "now" cần làm ngay, "soon" nên làm trong 1-3 tháng, "later" có thể cân nhắc sau. Mỗi mục: teeth (mảng FDI), outcome (kết quả mong đợi, 1 câu), when (thời gian dự kiến làm tiếp, ví dụ "trong 2 tuần"), visits (số hẹn). Thứ tự ưu tiên: đau và nhiễm trùng, nha chu, trám, nội nha, nhổ, phục hình, implant, chỉnh nha. Không giá, không bán hàng, không dọa; điều chưa chắc ghi "cần bác sĩ xác nhận". (4) advice: 3-5 lời dặn chăm sóc. (5) risks: 2-4 điều cần lưu ý trong tương lai.\n' +
+        'JSON: {"summary":"","problems":[{"f":16,"tinh_trang":"","rui_ro":""}],"items":[{"group":"now|soon|later","title":"","teeth":[],"outcome":"","when":"","visits":""}],"advice":[],"risks":[]}. Viết tiếng Việt.';
       const res = await window.api.ai.run({ prompt, images: [] });
-      const items = (res.items || []).filter((x) => x && x.title).map((x) => ({ group: GRP[x.group] ? x.group : 'soon', title: String(x.title), teeth: (Array.isArray(x.teeth) ? x.teeth : String(x.teeth || '').split(/[ ,;]+/)).map(Number).filter(Boolean), why: String(x.why || ''), outcome: String(x.outcome || ''), risk: String(x.risk || ''), when: String(x.when || ''), visits: String(x.visits || '') }));
-      C.plan = { items }; C.report.summary = String(res.summary || ''); C.report.advice = (res.advice || []).join('\n'); C.report.risks = (res.risks || []).join('\n');
-      S.rep = { busy: false, err: '' }; persist(); render(); if (!quiet) toast('Đã lập kế hoạch. Bác sĩ đọc lại và chỉnh trước khi xuất PDF.');
+      const nums = (v) => (Array.isArray(v) ? v : String(v || '').split(/[ ,;]+/)).map(Number).filter((f) => ORDER.indexOf(f) >= 0);
+      C.plan = {
+        problems: (res.problems || []).filter((x) => x && ORDER.indexOf(+x.f) >= 0).map((x) => ({ f: +x.f, tinh_trang: String(x.tinh_trang || ''), rui_ro: String(x.rui_ro || '') })).sort((a, b) => ordOf(a.f) - ordOf(b.f)),
+        items: (res.items || []).filter((x) => x && x.title).map((x) => ({ group: GRP[x.group] ? x.group : 'soon', title: String(x.title), teeth: nums(x.teeth), outcome: String(x.outcome || ''), when: String(x.when || ''), visits: String(x.visits || '') }))
+      };
+      C.report.summary = String(res.summary || ''); C.report.advice = (res.advice || []).join('\n'); C.report.risks = (res.risks || []).join('\n');
+      S.rep = { busy: false, err: '' }; persist(); repaintAll(); render();
     } catch (e) { S.rep = { busy: false, err: cleanErr(e) }; render(); }
   }
-  const aiReport = runPlan;
-  function planPanel() {
-    const it = (S.C.plan && S.C.plan.items) || [], R = S.C.report;
-    let h = '<div class="card"><div class="row sp"><h3>Phác đồ AI</h3><button class="btn ghost sm" type="button" id="pladd">Thêm mục</button></div>';
-    if (!it.length && !R.summary) return h + '<p class="muted small">Chưa có phác đồ. Tải dữ liệu rồi bấm "Phân tích kết hợp". AI sẽ gộp scan 3D với CT hoặc X-quang để đưa ra tình trạng tổng quát, việc cần làm ngay, việc làm sau, kết quả mong đợi và nguy cơ nếu không làm.</p></div>';
-    h += '<label class="f">Tình trạng tổng quát<textarea data-r="summary" style="min-height:90px">' + esc(R.summary) + '</textarea></label>';
-    Object.keys(GRP).forEach((g) => {
-      const L = it.map((x, i) => [x, i]).filter((q) => q[0].group === g); if (!L.length) return;
-      h += '<h4 style="margin:12px 0 4px">' + GRP[g] + '</h4>';
-      L.forEach(([x, i]) => {
-        h += '<div class="plan" style="border:1px solid var(--line,#ddd);border-radius:8px;padding:8px;margin:6px 0"><div class="row"><select data-pl="' + i + ':group">' + Object.keys(GRP).map((k) => '<option value="' + k + '"' + (k === x.group ? ' selected' : '') + '>' + GRP[k] + '</option>').join('') + '</select><input type="text" data-pl="' + i + ':title" value="' + esc(x.title) + '" placeholder="Thủ thuật" style="flex:1"><input type="text" data-pl="' + i + ':teeth" value="' + esc((x.teeth || []).join(' ')) + '" placeholder="Răng" style="width:90px"><button class="btn ghost sm" type="button" data-pld="' + i + '">Xóa</button></div>' +
-          ['why:Căn cứ (scan, phim)', 'outcome:Kết quả mong đợi', 'risk:Nguy cơ nếu không làm', 'when:Thời gian làm tiếp', 'visits:Số hẹn, thời gian'].map((k) => { const [a2, l] = k.split(':'); return '<label class="f">' + l + '<input type="text" data-pl="' + i + ':' + a2 + '" value="' + esc(x[a2]) + '"></label>'; }).join('') + '</div>';
-      });
-    });
-    return h + '</div>';
+  async function runAnalyze() {
+    if (!S.C || S.scan.busy) return;
+    if (!S.hasKey) { toast('Chưa có khóa API. Vào Cài đặt để nhập khóa OpenAI.'); return; }
+    const hasScan = Object.keys(S.jaws).length > 0;
+    if (!hasScan && !S.C.ct && !S.pano.url) { toast('Hãy tải scan 3D, CT hoặc X-quang trước'); return; }
+    if (S.mark) stopMark();
+    S.scan = { busy: true, phase: '', jaw: '', done: 0, total: 0, fail: [], err: '', cur: null, cancel: false, warn: [] }; const sc = S.scan;
+    S.tab = 'scan'; S.sel = null; syncTabs(); fxClear();
+    Object.keys(S.C.teeth).forEach((f) => { S.C.teeth[f] = (S.C.teeth[f] || []).filter((e) => e.kind !== 'ai'); });
+    S.C.plan = { problems: [], items: [] }; S.C.report.summary = ''; if (S.C.pano) S.C.pano.result = null; if (S.C.ct) S.C.ct.result = null; repaintAll(); render(); renderHud();
+    try {
+      if (S.C.ct) { sc.phase = 'ct'; renderHud(); render(); await runCt(true); }
+      if (!sc.cancel && S.C.pano && S.pano.url) { sc.phase = 'pano'; renderHud(); render(); await runPano(true); }
+      for (const jn of ['upper', 'lower']) {
+        if (sc.cancel || !S.jaws[jn]) continue;
+        if (!S.jaws[jn].seeds.length || invOf()) { await detectJaw(jn); if (S.C.detect && S.C.detect[jn]) S.C.detect[jn].confirmed = true; }
+      }
+      persist();
+      if (!sc.cancel && hasScan) {
+        sc.phase = 'screen'; sc.jaw = ''; showBothJaws(); renderHud(); render();
+        let cand = new Set(); problemTeeth().forEach((f) => { if (hasSeed(f)) cand.add(f); });
+        try { (await screenScan()).forEach((f) => cand.add(f)); } catch (e) { sc.warn.push('Chưa sàng lọc được trên scan: ' + cleanErr(e)); }
+        const list = Array.from(cand).filter((f) => !isMissing(f)).sort((a, b) => ordOf(a) - ordOf(b)).slice(0, 16); sc.total = list.length;
+        for (const jn of ['upper', 'lower']) {
+          const L = list.filter((f) => jawOf(f) === jn); if (!L.length || sc.cancel) continue; sc.phase = 'ai'; sc.jaw = jn; viewJawOnly(jn); renderHud(); await sleep(300);
+          let i = 0; const worker = async () => { while (i < L.length && !sc.cancel && S.C) { const f = L[i++]; await scanOne(f); sc.done++; renderHud(); await sleep(100); } };
+          await Promise.all([worker(), worker(), worker()]);
+        }
+      }
+      if (!sc.cancel && S.C) { sc.phase = 'report'; sc.jaw = ''; showBothJaws(); renderHud(); await runPlan(true); }
+    } catch (e) { console.error(e); sc.err = cleanErr(e); }
+    const cancelled = sc.cancel; sc.busy = false; sc.phase = ''; fxClear(); renderHud();
+    if (S.C) { showBothJaws(); S.sel = null; repaintAll(); render(); }
+    toast(cancelled ? 'Đã dừng phân tích' : sc.err || S.rep.err ? 'Có lỗi: ' + (sc.err || S.rep.err) + '. Bấm Phân tích để thử lại.' : 'Đã phân tích xong.');
+  }
+  const runCombined = runAnalyze, aiReport = runPlan;
+
+  /* ---- giao diện: Tab AI phân tích ---- */
+  function planView() {
+    const P = S.C.plan, R = S.C.report; if (!P || (!P.items.length && !P.problems.length && !R.summary)) return '<div class="card"><h3>Phác đồ AI</h3><p class="muted small">Tải dữ liệu rồi bấm "Phân tích". Máy sẽ tự làm hết các bước, không cần bấm thêm.</p></div>';
+    let h = '<div class="card"><h3>Tình trạng tổng quát</h3><p>' + esc(R.summary || 'Chưa có nhận định.') + '</p></div>';
+    h += '<div class="card"><h3>Răng cần chú ý</h3>' + (P.problems.length ? '<div class="pl">' + P.problems.map((x) => '<div class="pr"><span class="tn risk">' + x.f + '</span><div><div>' + esc(x.tinh_trang) + '</div><div class="small muted">Rủi ro nếu không xử lý: ' + esc(x.rui_ro) + '</div></div></div>').join('') + '</div>' : '<p class="muted small">Không thấy răng nào cần xử lý.</p>') + '</div>';
+    h += '<div class="card"><h3>Hướng điều trị</h3>' + (P.items.length ? Object.keys(GRP).map((g) => { const L = P.items.filter((x) => x.group === g); return L.length ? '<h4 class="gh">' + GRP[g] + '</h4>' + L.map((x) => '<div class="pi"><b>' + esc(x.title) + '</b> · răng ' + esc(x.teeth.join(', ')) + (x.when ? '<div class="small muted">Dự kiến: ' + esc([x.when, x.visits].filter(Boolean).join('. ')) + '</div>' : '') + (x.outcome ? '<div class="small">' + esc(x.outcome) + '</div>' : '') + '</div>').join('') : ''; }).join('') : '<p class="muted small">Chưa có hạng mục cần điều trị.</p>') + '</div>';
+    return h + '<p class="muted small">Kết quả AI chỉ để bác sĩ tham khảo, bác sĩ xem lại ở tab "Bác sĩ hội chẩn".</p>';
+  }
+  function aiPanel() {
+    const sc = S.scan, hasU = !!S.jaws.upper, hasL = !!S.jaws.lower, ct0 = S.C.ct, any = hasU || hasL || !!S.pano.url || !!ct0, done = !!(S.C.plan && (S.C.plan.items.length || S.C.plan.problems.length));
+    const row = (t, st, id, lab, acc, mult) => '<div class="row sp" style="padding:7px 0;border-bottom:1px solid var(--line,#e3e3e3)"><div><b>' + t + '</b><div class="small muted">' + st + '</div></div><label class="btn ghost sm" style="cursor:pointer">' + lab + '<input type="file" id="' + id + '" accept="' + acc + '"' + (mult ? ' multiple' : '') + ' hidden></label></div>';
+    const PH = { ct: 'Đang đọc CT…', pano: 'Đang đọc X-quang…', detect: 'Đang nhận diện răng trên scan…', screen: 'Đang tìm răng có vấn đề…', ai: 'Đang khám các răng có vấn đề (' + sc.done + '/' + sc.total + ')…', report: 'Đang lập phác đồ…' };
+    let h = '<div class="card ai"><h3>Dữ liệu</h3>' +
+      row('Scan 3D trong miệng', hasU || hasL ? 'Hàm trên ' + (hasU ? '✓' : '—') + ' · Hàm dưới ' + (hasL ? '✓' : '—') : 'Chưa có', 'scanFile', hasU || hasL ? 'Đổi' : 'Tải lên', '.ply,.stl,.zip', true) +
+      row('CT 3D (CBCT)', ct0 ? ct0.n + ' lát' : 'Chưa có', 'ctFile', ct0 ? 'Đổi' : 'Tải lên', '.dcm,.dicom,.zip', true) +
+      row('X-quang toàn cảnh', S.pano.url ? 'Đã có' : 'Chưa có', 'panoFile', S.pano.url ? 'Đổi' : 'Tải lên', 'image/png,image/jpeg,image/webp,.dcm,.dicom', false) +
+      '<div class="row" style="margin-top:10px"><button class="btn" type="button" id="scanall"' + (sc.busy || !any ? ' disabled' : '') + ' style="padding:9px 26px">' + (sc.busy ? 'Đang phân tích…' : done ? 'Phân tích lại' : 'Phân tích') + '</button>' + (sc.busy ? '<span class="small">' + esc(PH[sc.phase] || 'Đang chuẩn bị…') + '</span>' : '') + '</div>';
+    if (!S.hasKey) h += '<div class="callout">Chưa có khóa OpenAI. Vào <b>Cài đặt</b> để nhập khóa.</div>';
+    sc.warn.forEach((w) => { h += '<div class="callout">' + esc(w) + '</div>'; });
+    if (!sc.busy && (sc.err || S.rep.err)) h += '<p class="err">' + esc(sc.err || S.rep.err) + '</p>';
+    return h + '</div>' + planView();
+  }
+  /* ---- Tab Bác sĩ hội chẩn: chỉ bổ sung ý kiến ---- */
+  function examPanel() {
+    const P = S.C.plan || { problems: [], items: [] }, R = S.C.report;
+    let h = '<div class="card"><h3>Ý kiến bổ sung của bác sĩ</h3><textarea data-r="doctor" style="min-height:130px;width:100%" placeholder="Ghi thêm nhận định, răng cần lưu ý, dặn dò… Nội dung này được in vào phiếu.">' + esc(R.doctor || '') + '</textarea></div>';
+    h += '<div class="card"><h3>Điều chỉnh phác đồ AI</h3>';
+    if (P.problems.length) h += '<div class="lbl">Răng cần chú ý</div>' + P.problems.map((x, i) => '<div class="row sp" style="padding:4px 0"><span><b>' + x.f + '</b> ' + esc(x.tinh_trang) + '</span><button class="btn ghost sm" type="button" data-pdx="' + i + '">Bỏ</button></div>').join('');
+    if (P.items.length) h += '<div class="lbl" style="margin-top:8px">Hướng điều trị</div>' + P.items.map((x, i) => '<div class="row sp" style="padding:4px 0"><span><b>' + esc(x.title) + '</b> · răng ' + esc(x.teeth.join(', ')) + ' · ' + GRP[x.group] + '</span><button class="btn ghost sm" type="button" data-pld="' + i + '">Bỏ</button></div>').join('');
+    if (!P.problems.length && !P.items.length) h += '<p class="muted small">Chưa có phác đồ AI.</p>';
+    h += '<div class="lbl" style="margin-top:10px">Thêm hạng mục</div><div class="row"><select id="nwg">' + Object.keys(GRP).map((g) => '<option value="' + g + '">' + GRP[g] + '</option>').join('') + '</select><input type="text" id="nwt" placeholder="Hạng mục (vd Bọc răng sứ)" style="flex:1"><input type="text" id="nwf" placeholder="Răng" style="width:80px"><button class="btn sm" type="button" id="nwadd">Thêm</button></div></div>';
+    return h;
+  }
+  /* ---- Tab PDF: xem trước và xuất ---- */
+  function docPanel() {
+    return '<div class="row sp"><h3>Phiếu khám</h3><button class="btn" type="button" id="pdf"' + (S.rep.busy ? ' disabled' : '') + '>Xuất PDF</button></div><iframe id="pvf" title="Xem trước phiếu khám" style="width:100%;height:calc(100vh - 230px);min-height:420px;border:1px solid var(--line,#ccc);border-radius:6px;background:#fff"></iframe>';
+  }
+  function reportCtx() {
+    const C = S.C, states = {}; SEQ.upper.concat(SEQ.lower).forEach((f) => { states[f] = stateOf(f); });
+    const P = C.plan || { problems: [], items: [] };
+    return {
+      clinic: S.cfg.clinic, patient: C.patient, code: C.code, summary: C.report.summary, doctor: C.report.doctor || '',
+      advice: (C.report.advice || '').split('\n').map((x) => x.trim()).filter(Boolean), risks: (C.report.risks || '').split('\n').map((x) => x.trim()).filter(Boolean),
+      shots: { upper: S.jaws.upper ? jawShot('upper') : '', lower: S.jaws.lower ? jawShot('lower') : '' }, states, problems: P.problems,
+      plan: P.items.map((x) => ({ group: x.group, title: x.title, teeth: x.teeth.join(', '), outcome: x.outcome, when: x.when, visits: x.visits })),
+      care: C.care.filter((t) => t.show && !t.done).sort((a, b) => a.due.localeCompare(b.due))
+    };
+  }
+  function pdfName() { const C = S.C; return 'PhieuKham_' + (C.patient.name || C.key).normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D').replace(/[^A-Za-z0-9]+/g, '_') + '_' + todayIso() + '.pdf'; }
+  async function exportPdf() {
+    const C = S.C; if (!C) return;
+    S.rep.busy = true; $('busy').hidden = false; await new Promise((r) => setTimeout(r, 40));
+    try {
+      const r = await window.api.makePdf({ html: window.buildReport(reportCtx()), name: pdfName(), footerLeft: (S.cfg.clinic.name || '') + ' · Phiếu khám ' + C.code });
+      if (r && r.path) toast('Đã lưu PDF');
+    } catch (e) { toast('Không xuất được PDF: ' + cleanErr(e)); } finally { S.rep.busy = false; $('busy').hidden = true; }
   }
 
   /* ================= PDF ================= */
@@ -646,160 +735,11 @@
     });
     return rows;
   }
-  async function exportPdf() {
-    const C = S.C; if (!Object.keys(S.jaws).length) { toast('Chưa mở scan'); return; }
-    S.rep.busy = true; $('busy').hidden = false; await new Promise((r) => setTimeout(r, 40));
-    try {
-      const rows = reportRows(), states = {}; SEQ.upper.concat(SEQ.lower).forEach((f) => { states[f] = stateOf(f); });
-      const done = rows.reduce((a, r) => a + r.done.length, 0), todo = rows.reduce((a, r) => a + r.todo.length, 0);
-      const ctx = {
-        clinic: S.cfg.clinic, patient: C.patient, code: C.code, summary: C.report.summary,
-        advice: C.report.advice.split('\n').map((x) => x.trim()).filter(Boolean), risks: C.report.risks.split('\n').map((x) => x.trim()).filter(Boolean),
-        shots: { upper: jawShot('upper'), lower: jawShot('lower') }, states, teethRows: rows,
-        counts: { examined: Object.keys(C.teeth).filter((f) => teethLog(f).length).length, done, todo, missing: C.marks.missing.length },
-        plan: ((C.plan && C.plan.items) || []).map((x) => ({ group: x.group, title: x.title, teeth: (x.teeth || []).join(', '), why: x.why, outcome: x.outcome, risk: x.risk, when: x.when, visits: x.visits })),
-        care: C.care.filter((t) => t.show && !t.done).sort((a, b) => a.due.localeCompare(b.due))
-      };
-      const name = 'PhieuKham_' + (C.patient.name || C.key).normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D').replace(/[^A-Za-z0-9]+/g, '_') + '_' + todayIso() + '.pdf';
-      const r = await window.api.makePdf({ html: window.buildReport(ctx), name, footerLeft: (S.cfg.clinic.name || '') + ' · Phiếu khám ' + C.code });
-      if (r && r.path) toast('Đã lưu PDF');
-    } catch (e) { toast('Không xuất được PDF: ' + cleanErr(e)); } finally { S.rep.busy = false; $('busy').hidden = true; }
-  }
-
-  /* ================= side panel ================= */
-  const STL = { done: ['Đã làm', 'done'], pend: ['Chưa làm', 'pend'], risk: ['Chưa làm, nên sớm', 'risk'], none: ['Chưa có dữ liệu', 'none'], missing: ['Đã mất răng', 'none'] };
-  function archStrip() {
-    const cell = (f, i) => { const st = stateOf(f), J = S.jaws[jawOf(f)], has = J && J.seeds.some((s) => s.f === f); return '<button type="button" class="t ' + st + (has || st === 'missing' ? '' : ' off') + (i === 8 ? ' g' : '') + '" data-f="' + f + '" aria-pressed="' + (S.sel === f) + '" aria-label="Răng ' + f + '"><i>' + ({ done: '✓', pend: '●', risk: '!', missing: '×', none: '' }[st]) + '</i>' + f + '</button>'; };
-    return '<div><div class="arch">' + SEQ.upper.map(cell).join('') + '</div><div class="arch" style="margin-top:3px">' + SEQ.lower.map(cell).join('') + '</div><div class="lg"><span style="--c:var(--done)">Đã làm</span><span style="--c:var(--pend)">Chưa làm</span><span style="--c:var(--risk)">Chưa làm, nên sớm</span><span style="--c:var(--none)">Chưa có dữ liệu</span></div></div>';
-  }
-  function toothPanel(f) {
-    const st = stateOf(f), log = teethLog(f), m = svcMap(f), lastAi = aiLatest(f).length ? aiLatest(f)[0] : null, hasSeed = !!(S.jaws[jawOf(f)] && S.jaws[jawOf(f)].seeds.some((s) => s.f === f));
-    let h = '<div class="row sp"><div><h2>Răng ' + f + '</h2><p class="muted small">' + (jawOf(f) === 'upper' ? 'Hàm trên' : 'Hàm dưới') + (f % 10 === 8 ? ' · răng khôn' : '') + '</p></div><span class="b ' + STL[st][1] + '">' + STL[st][0] + '</span></div>';
-    h += '<div class="row">' + (hasSeed ? '<button class="btn ghost sm" type="button" data-look="occ">Nhìn mặt nhai</button><button class="btn ghost sm" type="button" data-look="buc">Mặt ngoài</button><button class="btn ghost sm" type="button" data-look="lin">Mặt trong</button>' : '<span class="muted small">Răng này chưa có vị trí trên mô hình.</span><button class="btn ghost sm" type="button" data-act="place">Chỉ vị trí răng này</button>') + (hasSeed ? '<button class="btn ghost sm" type="button" data-act="place">Chỉnh lại vị trí</button>' : '') + '<label class="row small muted" style="margin-left:auto"><input type="checkbox" id="miss" ' + (isMissing(f) ? 'checked' : '') + '> Đã mất răng</label></div>';
-    h += '<div class="card ai"><div class="row sp"><h3>AI khám</h3>' + (hasSeed ? '<button class="btn sm" type="button" id="runai"' + (S.ai.busy ? ' disabled' : '') + '>' + (S.ai.busy ? 'Đang phân tích…' : lastAi ? 'Phân tích lại' : 'Phân tích răng này') + '</button>' : '') + '</div>';
-    if (S.ai.err) h += '<p class="err">' + esc(S.ai.err) + '</p>';
-    if (lastAi) {
-      aiLatest(f).forEach((la) => {
-        const a = la.ai || {}; a.observations = a.observations || []; a.services = a.services || [];
-        h += '<div class="aisrc"><div class="lbl">' + (la.src === 'pano' ? 'Từ ảnh X-quang' : la.src === 'ct' ? 'Từ CT 3D' : 'Từ scan 3D') + '</div><p>' + esc(a.impression) + '</p>' + (a.observations.length > 1 || (a.observations.length === 1 && a.observations[0] !== a.impression) ? '<ul class="l small">' + a.observations.map((o) => '<li>' + esc(o) + '</li>').join('') + '</ul>' : '') +
-          (a.services.length ? '<div class="row">' + a.services.map((x) => '<span class="b ' + (x.priority === 'cao' ? 'risk' : x.priority === 'thấp' ? 'none' : 'pend') + '">' + esc(x.name) + ' · ' + esc(x.priority) + '</span>').join('') + '</div><ul class="l small muted">' + a.services.filter((x) => x.why).map((x) => '<li><b>' + esc(x.name) + ':</b> ' + esc(x.why) + '</li>').join('') + '</ul>' : '') +
-          (a.review && a.review.length ? '<div class="callout">Cần bác sĩ xác nhận: ' + a.review.map(esc).join('; ') + '</div>' : '') + '<p class="muted small">' + esc(la.who) + ' · ' + fmt(la.date) + '. Gợi ý từ hình ảnh, không thay thế khám lâm sàng.</p></div>';
-      });
-    } else if (!S.ai.busy) h += '<p class="muted small">Chưa có kết quả AI cho răng này.</p>';
-    h += '</div><div><div class="lbl">Dịch vụ của răng này</div>';
-    if (!m.size) h += '<p class="muted small">Chưa có dịch vụ nào được đề xuất, tư vấn hoặc thực hiện.</p>';
-    else {
-      h += '<table><thead><tr><th>Dịch vụ</th><th>Tư vấn</th><th>Làm</th></tr></thead><tbody>';
-      m.forEach((s) => {
-        const adv = s.advice.length ? s.advice.map((e) => '<div class="cell"><b>' + esc(e.who || '?') + '</b><span>' + fmt(e.date) + ' · ' + esc(e.react || '') + '</span></div>').join('') : '<span class="muted small">' + (s.ai ? 'AI đề xuất, chưa ai tư vấn' : '—') + '</span>';
-        const dn = s.done.length ? s.done.map((e) => '<div class="cell"><b>' + fmt(e.date) + '</b><span>' + esc(e.who || '') + '</span></div>').join('') : '<span class="b ' + (s.ai && s.ai.priority === 'cao' ? 'risk' : 'pend') + '">Chưa làm</span> <button class="btn ghost sm" type="button" data-fill="' + esc(s.name) + '">Ghi đã làm</button>';
-        h += '<tr><td><b>' + esc(s.name) + '</b>' + (s.ai ? '<div class="small muted">AI: ' + esc(s.ai.priority || '') + '</div>' : '') + '</td><td>' + adv + '</td><td>' + dn + '</td></tr>';
-      });
-      h += '</tbody></table>';
-    }
-    h += '</div>';
-    const F = S.form, opts = CATALOG.map((c) => '<option value="' + esc(c) + '">').join('');
-    h += '<div class="card"><h3>Ghi nhận cho răng ' + f + '</h3><div class="seg" role="group">' + [['advice', 'Đã tư vấn'], ['done', 'Đã làm'], ['note', 'Ghi chú']].map((k) => '<button type="button" data-kind="' + k[0] + '" aria-pressed="' + (F.kind === k[0]) + '">' + k[1] + '</button>').join('') + '</div><div class="form">' +
-      (F.kind !== 'note' ? '<label class="f">Dịch vụ<input type="text" id="fsvc" list="cat" value="' + esc(F.svc) + '" placeholder="Chọn hoặc gõ tên dịch vụ"><datalist id="cat">' + opts + '</datalist></label>' : '') +
-      '<div class="f2"><label class="f">Người ' + (F.kind === 'advice' ? 'tư vấn' : F.kind === 'done' ? 'thực hiện' : 'ghi') + '<input type="text" id="fwho" value="' + esc(F.who) + '" placeholder="Tên"></label><label class="f">Vai trò<select id="frole">' + ['Bác sĩ', 'Sale', 'Lễ tân', 'Trợ thủ'].map((r) => '<option' + (r === F.role ? ' selected' : '') + '>' + r + '</option>').join('') + '</select></label></div>' +
-      '<div class="f2"><label class="f">Ngày<input type="date" id="fdate" value="' + F.date + '"></label>' + (F.kind === 'advice' ? '<label class="f">Khách phản hồi<select id="freact">' + ['Đang cân nhắc', 'Đồng ý', 'Từ chối', 'Hẹn lại'].map((r) => '<option' + (r === F.react ? ' selected' : '') + '>' + r + '</option>').join('') + '</select></label>' : '<span></span>') + '</div>' +
-      '<label class="f">Ghi chú<textarea id="ftext" placeholder="Chi tiết: vật liệu, lý do, dặn dò…">' + esc(F.text) + '</textarea></label><div class="row"><button class="btn" type="button" id="save">Lưu vào răng ' + f + '</button></div></div></div>';
-    h += '<div><div class="lbl">Lịch sử răng ' + f + '</div><div>' + (log.length ? log.slice().reverse().map((e) => {
-      const k = { ai: 'AI khám', advice: 'Tư vấn', done: 'Đã làm', note: 'Ghi chú' }[e.kind], body = e.kind === 'ai' ? esc((e.ai && e.ai.impression) || '') : '<b>' + esc(e.svc || '') + '</b>' + (e.react ? ' · ' + esc(e.react) : '') + (e.text ? '<q>' + esc(e.text) + '</q>' : '');
-      return '<div class="ev"><time>' + fmt(e.date) + '</time><div><span class="b ' + (e.kind === 'done' ? 'done' : e.kind === 'ai' ? 'sel' : 'none') + '">' + k + '</span> <span class="muted small">' + esc(e.who || '') + (e.role ? ' (' + esc(e.role) + ')' : '') + '</span><div>' + body + '</div>' + (e.kind !== 'ai' ? '<button class="btn ghost sm" type="button" data-del="' + e.id + '" style="margin-top:4px">Xóa</button>' : '') + '</div></div>';
-    }).join('') : '<p class="muted small">Chưa có lịch sử.</p>') + '</div></div>';
-    return h;
-  }
-  const jawName = (jn) => (jn === 'upper' ? 'hàm trên' : 'hàm dưới');
-  const allSeeds = () => { const o = []; Object.values(S.jaws).forEach((J) => J.seeds.forEach((q) => o.push(q.f))); return o.sort((a, b) => ordOf(a) - ordOf(b)); };
-  function scanPanel() {
-    const sc = S.scan, seeds = allSeeds(), nAi = seeds.filter((f) => teethLog(f).some((e) => e.kind === 'ai' && !e.src)).length, det = S.C.detect || {};
-    const hasU = !!S.jaws.upper, hasL = !!S.jaws.lower, ct0 = S.C.ct, anyData = hasU || hasL || !!S.pano.url || !!ct0, planned = !!(S.C.plan && S.C.plan.items && S.C.plan.items.length);
-    const inrow = (t, st, btn) => '<div class="row sp" style="padding:7px 0;border-bottom:1px solid var(--line,#e3e3e3)"><div><b>' + t + '</b><div class="small muted">' + st + '</div></div>' + btn + '</div>';
-    const PH = { detect: 'Nhận diện răng', confirm: 'Chờ bác sĩ xác nhận số răng', pano: 'Đọc X-quang', ct: 'Đọc CT', ai: 'Khám từng răng (' + sc.done + '/' + sc.total + ')', report: 'Lập phác đồ' };
-    let h = '<div class="card ai"><h3>Dữ liệu đầu vào</h3>' +
-      inrow('Scan 3D trong miệng', hasU || hasL ? 'Hàm trên ' + (hasU ? '✓' : '—') + ' · Hàm dưới ' + (hasL ? '✓' : '—') + (seeds.length ? ' · ' + seeds.length + ' răng' : '') : 'Chưa có (file .ply, .stl hoặc zip)', '<label class="btn ghost sm" style="cursor:pointer">' + (hasU || hasL ? 'Đổi scan' : 'Tải scan 3D') + '<input type="file" id="scanFile" accept=".ply,.stl,.zip" multiple hidden></label>') +
-      inrow('X-quang toàn cảnh', S.pano.url ? 'Đã có' : 'Chưa có (DICOM, JPG, PNG)', '<label class="btn ghost sm" style="cursor:pointer">' + (S.pano.url ? 'Đổi phim' : 'Tải phim') + '<input type="file" id="panoFile" accept="image/png,image/jpeg,image/webp,.dcm,.dicom" hidden></label>') +
-      inrow('CT 3D (CBCT)', ct0 ? ct0.n + ' lát · ' + ct0.vx + ' mm' : 'Chưa có (zip hoặc nhiều file .dcm)', '<label class="btn ghost sm" style="cursor:pointer">' + (ct0 ? 'Đổi CT' : 'Tải CT') + '<input type="file" id="ctFile" accept=".dcm,.dicom,.zip" multiple hidden></label>') +
-      '<div class="row" style="margin-top:10px"><button class="btn" type="button" id="scanall"' + (sc.busy || !anyData ? ' disabled' : '') + ' style="padding:9px 22px">' + (sc.busy ? 'Đang phân tích…' : planned ? 'Phân tích lại' : 'Phân tích kết hợp') + '</button>' + (sc.busy ? '<span class="small">' + esc(PH[sc.phase] || '') + '</span>' : '') + '</div>';
-    if (!S.hasKey) h += '<div class="callout">Chưa có khóa OpenAI. Vào <b>Cài đặt</b> nhập khóa để AI phân tích.</div>';
-    sc.warn.forEach((w) => { h += '<div class="callout">' + esc(w) + '</div>'; });
-    if (sc.err && !sc.busy) h += '<p class="err">' + esc(sc.err) + '</p>';
-    if (S.rep.err) h += '<p class="err">' + esc(S.rep.err) + '</p>';
-    h += '</div>' + planPanel();
-    h += '<details class="card"><summary><b>Kiểm tra số răng</b></summary><p class="small muted">Máy tự đoán vị trí và số thứ tự răng từ scan, nên bác sĩ hãy nhìn lướt các số trên mô hình. Nếu thấy nhầm, sửa ngay tại đây:</p><div class="row">';
-    ['upper', 'lower'].forEach((jn) => { if (!S.jaws[jn]) return; h += '<button class="btn ghost sm" type="button" data-act="redetect" data-jaw="' + jn + '"' + (sc.busy ? ' disabled' : '') + '>Nhận diện lại ' + jawName(jn) + '</button><button class="btn ghost sm" type="button" data-act="flip" data-jaw="' + jn + '"' + (sc.busy ? ' disabled' : '') + '>Đảo trái/phải ' + jawName(jn) + '</button>'; });
-    h += '</div><p class="small muted">Một răng sai vị trí: vào tab "Thăm khám của bác sĩ", chọn răng đó rồi bấm "Chỉnh lại vị trí". Muốn tự bấm cả hàm: nút "Đánh dấu thủ công" phía trên mô hình.' + (det.upper || det.lower ? '' : '') + '</p></details>';
-    if (S.pano.url || ct0) h += '<details class="card"><summary><b>Chi tiết đọc phim X-quang và CT</b></summary>';
-    if (S.pano.url) h += '<h3>X-quang / Panorama</h3>';
-    if (S.pano.url) {
-      const pm = S.C.pano && S.C.pano.meta;
-      h += '<img class="pano" id="panoImg" src="' + S.pano.url + '" alt="Phim X-quang của khách" title="Bấm để phóng to">' + (pm && (pm.maker || pm.age) ? '<p class="muted small">' + esc([pm.maker, pm.model, pm.modality, pm.age ? 'tuổi ' + String(pm.age).replace(/^0+/, '').replace('Y', '') : '', pm.study ? fmt(pm.study.slice(0, 4) + '-' + pm.study.slice(4, 6) + '-' + pm.study.slice(6, 8)) : ''].filter(Boolean).join(' · ')) + '</p>' : '') +
-        '<div class="row"><button class="btn ghost sm" type="button" id="panoZoom">Phóng to, chỉnh sáng, đo</button><button class="btn sm" type="button" id="runpano"' + (S.pano.busy ? ' disabled' : '') + '>' + (S.pano.busy ? 'Đang đọc phim…' : S.C.pano && S.C.pano.result ? 'Đọc lại phim' : 'AI đọc phim X-quang') + '</button></div>';
-      if (S.pano.err) h += '<p class="err">' + esc(S.pano.err) + '</p>';
-      const r = S.C.pano && S.C.pano.result;
-      if (r) h += (r.quality ? '<p class="muted small">Chất lượng phim: ' + esc(r.quality) + '</p>' : '') + '<p>' + esc(r.summary) + '</p>' + ((r.sections || []).length ? '<div class="secl">' + r.sections.map((x) => '<div><b>' + esc(x.k) + '.</b> ' + esc(x.v) + '</div>').join('') + '</div>' : '') + (r.general.length ? '<ul class="l small">' + r.general.map((x) => '<li>' + esc(x) + '</li>').join('') + '</ul>' : '') + (r.review.length ? '<div class="callout">Cần bác sĩ xác nhận:<ul class="l small">' + r.review.map((x) => '<li>' + esc(x) + '</li>').join('') + '</ul></div>' : '') + '<p class="muted small">' + r.count + ' răng có ghi nhận từ X-quang (xem trong hồ sơ từng răng). ' + fmt(r.date) + '</p>';
-    }
-    { const c = S.C.ct, r = c && c.result;
-      if (c) h += '<h3>CT 3D (CBCT)</h3>';
-      if (c) h += '<p class="muted small">' + [c.meta && c.meta.maker, c.meta && c.meta.model, c.n + ' lát', c.w + '×' + c.h, c.vx + ' mm', fmt(c.date)].filter(Boolean).map(esc).join(' · ') + '</p><div class="row"><button class="btn ghost sm" type="button" id="ctOpen">Mở trình xem CT</button><button class="btn sm" type="button" id="ctRun"' + (S.ctBusy ? ' disabled' : '') + '>' + (S.ctBusy ? 'Đang đọc CT…' : r ? 'Đọc lại CT' : 'AI đọc CT') + '</button></div>';
-      if (S.ctErr) h += '<p class="err">' + esc(S.ctErr) + '</p>';
-      if (r) h += (r.quality ? '<p class="muted small">Chất lượng: ' + esc(r.quality) + '</p>' : '') + '<p>' + esc(r.summary) + '</p>' + ((r.sections || []).length ? '<div class="secl">' + r.sections.map((x) => '<div><b>' + esc(x.k) + '.</b> ' + esc(x.v) + '</div>').join('') + '</div>' : '') + (r.general.length ? '<ul class="l small">' + r.general.map((x) => '<li>' + esc(x) + '</li>').join('') + '</ul>' : '') + (r.review.length ? '<div class="callout">Cần bác sĩ xác nhận:<ul class="l small">' + r.review.map((x) => '<li>' + esc(x) + '</li>').join('') + '</ul></div>' : '') + '<p class="muted small">' + r.count + ' răng có ghi nhận từ CT. ' + fmt(r.date) + '</p>';
-      if (S.pano.url || c) h += '</details>'; }
-    if (seeds.length) {
-      h += '<details class="card"><summary><b>Kết quả từng răng</b></summary><div class="slist">' + seeds.map((f) => {
-        const st = stateOf(f), la = aiLatest(f), a = la.length ? la[0].ai : null, running = FX.rings.has(f);
-        const sv = a ? (a.services || []).slice(0, 3).map((x) => '<span class="b ' + (x.priority === 'cao' ? 'risk' : x.priority === 'thấp' ? 'none' : 'pend') + '">' + esc(x.name) + '</span>').join('') : '';
-        return '<button type="button" class="srow' + (S.sel === f ? ' on' : '') + '" data-f="' + f + '"><span class="tn ' + st + '">' + f + '</span><span class="sb2"><span class="small">' + (running ? 'Đang quét…' : a ? esc(a.impression || 'Đã quét') : '<i class="muted">Chưa quét</i>') + '</span>' + (sv ? '<span class="row">' + sv + '</span>' : '') + '</span></button>';
-      }).join('') + '</div></details>';
-    }
-    return h;
-  }
-  /* ---- Chăm sóc (đã làm) và Chưa làm: bảng dịch vụ, tick răng, sáng răng trên mô hình ---- */
   function allServices() { const m = new Map(); CATALOG.concat(S.C.services || []).forEach((n) => m.set(norm(n), n)); Object.keys(S.C.teeth).forEach((f) => teethLog(+f).forEach((e) => { if (e.svc && (e.kind === 'advice' || e.kind === 'done') && !m.has(norm(e.svc))) m.set(norm(e.svc), e.svc); })); return Array.from(m.values()); }
   function teethOfSvc(name, mode) {
     const k = norm(name), out = [];
     ORDER.forEach((f) => { const o = svcMap(f).get(k); if (!o) return; if (mode === 'done' ? o.done.length : (!o.done.length && (o.ai || o.advice.length))) out.push(f); });
     return out;
-  }
-  const hasSeed = (f) => !!(S.jaws[jawOf(f)] && S.jaws[jawOf(f)].seeds.some((q) => q.f === f));
-  function ckGrid(name, mode) {
-    const k = norm(name), cell = (f, i) => {
-      const o = svcMap(f).get(k), done = !!(o && o.done.length), viaCare = done && o.done.every((e) => e.via === 'care'), off = !hasSeed(f) || isMissing(f), dis = off || (done && !viaCare);
-      return '<label class="ck' + (off ? ' off' : '') + (i === 8 ? ' g' : '') + '" title="' + (done && !viaCare ? 'Đã ghi ở tab Thăm khám, sửa ở đó' : off ? 'Răng chưa có trên mô hình' : '') + '"><input type="checkbox" data-ck="' + esc(name) + '|' + f + '"' + (done ? ' checked' : '') + (dis ? ' disabled' : '') + '><span>' + f + '</span></label>';
-    };
-    return '<div class="ckg"><div class="arch">' + SEQ.upper.map(cell).join('') + '</div><div class="arch">' + SEQ.lower.map(cell).join('') + '</div></div>';
-  }
-  function svcPanel(mode) {
-    const list = allServices().map((n) => ({ n, t: teethOfSvc(n, mode) })).sort((a, b) => (b.t.length > 0) - (a.t.length > 0) || b.t.length - a.t.length);
-    const shown = mode === 'todo' ? list.filter((x) => x.t.length) : list;
-    let h = mode === 'done' ? '<div><div class="lbl">Dịch vụ đã làm</div><p class="small muted">Bấm vào một dịch vụ để mở bảng răng và tick những răng đã làm. Rê chuột hoặc bấm vào dịch vụ, các răng đã làm dịch vụ đó sẽ sáng lên trên mô hình 3D.</p></div>' : '<div><div class="lbl">Dịch vụ chưa làm</div><p class="small muted">Những dịch vụ AI hoặc nhân viên đã đề xuất nhưng chưa làm. Rê chuột hoặc bấm vào dịch vụ để xem răng nào trên mô hình. Tick vào răng khi đã làm xong, dịch vụ sẽ chuyển sang tab Chăm sóc.</p></div>';
-    if (!shown.length) h += '<p class="muted small">' + (mode === 'todo' ? 'Chưa có dịch vụ nào đang chờ làm.' : 'Chưa có dịch vụ.') + '</p>';
-    h += '<div class="svcs">' + shown.map(({ n, t }) => {
-      const open = S.care.open === mode + '|' + norm(n), risk = mode === 'todo' && t.some((f) => { const o = svcMap(f).get(norm(n)); return o && o.ai && o.ai.priority === 'cao'; });
-      let body = '';
-      if (open) {
-        if (mode === 'done') body = ckGrid(n, mode) + '<p class="small muted">Tick = răng đã làm hôm nay (ghi tên người thực hiện ở tab Thăm khám nếu cần chi tiết).</p>';
-        else body = '<div class="trows">' + t.map((f) => { const o = svcMap(f).get(norm(n)), adv = o.advice.map((e) => esc(e.who || '?') + ' tư vấn ' + fmt(e.date) + (e.react ? ' · ' + esc(e.react) : '')).join('; '); return '<div class="trow"><button class="btn ghost sm" type="button" data-f="' + f + '">' + f + '</button><span class="small">' + (o.ai ? 'AI đề xuất (' + esc(o.ai.priority || '') + ')' + (o.ai.why ? ': ' + esc(o.ai.why) : '') : '') + (o.ai && adv ? '<br>' : '') + (adv || (o.ai ? '' : '—')) + '</span><label class="ck1"><input type="checkbox" data-ck="' + esc(n) + '|' + f + '"> Đã làm</label></div>'; }).join('') + '</div>'; 
-      }
-      return '<div class="svc' + (open ? ' open' : '') + '" data-svc="' + esc(n) + '" data-mode="' + mode + '"><button type="button" class="sh2" data-svc-h="1"><span>' + esc(n) + '</span><span class="row">' + (risk ? '<span class="b risk">nên sớm</span>' : '') + '<span class="b ' + (t.length ? (mode === 'done' ? 'done' : 'pend') : 'none') + '">' + (t.length ? t.length + ' răng' : 'chưa có') + '</span></span></button>' + (open ? '<div class="svb">' + body + '</div>' : '') + '</div>';
-    }).join('') + '</div>';
-    if (mode === 'done') h += '<div class="row"><input type="text" id="newsvc" placeholder="Thêm dịch vụ khác, ví dụ Mão sứ Katana" style="flex:1"><button class="btn ghost sm" type="button" id="addsvc">Thêm</button></div>';
-    return h;
-  }
-  function docPanel() {
-    const P = S.C.patient, R = S.C.report;
-    return '<div class="card"><h3>Thông tin khách</h3><div class="form"><label class="f">Họ và tên<input type="text" data-p="name" value="' + esc(P.name) + '"></label>' +
-      '<div class="f3"><label class="f">Năm sinh<input type="text" data-p="year" value="' + esc(P.year) + '"></label><label class="f">Giới tính<select data-p="gender">' + ['', 'Nam', 'Nữ'].map((g) => '<option' + (g === P.gender ? ' selected' : '') + '>' + g + '</option>').join('') + '</select></label><label class="f">Điện thoại<input type="text" data-p="phone" value="' + esc(P.phone) + '"></label></div>' +
-      '<div class="f2"><label class="f">Bác sĩ khám<input type="text" data-p="doctor" value="' + esc(P.doctor) + '" placeholder="' + esc(S.cfg.clinic.doctor) + '"></label><label class="f">Ngày khám<input type="date" data-p="visitDate" value="' + esc(P.visitDate) + '"></label></div>' +
-      '<label class="f">Tiền sử, lưu ý (dị ứng, bệnh nền, thuốc đang dùng)<textarea data-p="history">' + esc(P.history) + '</textarea></label></div></div>' +
-      '<div class="card"><div class="row sp"><h3>Nội dung phiếu gửi khách</h3><button class="btn sm" type="button" id="airep"' + (S.rep.busy ? ' disabled' : '') + '>' + (S.rep.busy ? 'Đang soạn…' : 'AI soạn lại phác đồ') + '</button></div>' +
-      (S.rep.err ? '<p class="err">' + esc(S.rep.err) + '</p>' : '') +
-      '<label class="f">Nhận định tổng quan<textarea data-r="summary" style="min-height:110px">' + esc(R.summary) + '</textarea></label>' +
-      '<label class="f">Lời khuyên (mỗi dòng một ý)<textarea data-r="advice" style="min-height:100px">' + esc(R.advice) + '</textarea></label>' +
-      '<label class="f">Những điều cần lưu ý trong tương lai (mỗi dòng một ý)<textarea data-r="risks" style="min-height:100px">' + esc(R.risks) + '</textarea></label>' +
-      '<p class="muted small">AI soạn xong, bác sĩ đọc và sửa lại trước khi gửi cho khách. Phiếu không có giá hay nội dung bán hàng.</p></div>' +
-      '<div class="row"><button class="btn" type="button" id="pdf">Xuất phiếu khám PDF</button><span class="muted small">Gồm ảnh scan 2 hàm, sơ đồ răng, chi tiết từng răng, lời khuyên, lịch tái khám.</span></div>';
   }
   function callPanel() {
     const list = S.C.care.slice().sort((a, b) => (a.done - b.done) || a.due.localeCompare(b.due));
@@ -813,21 +753,17 @@
     const has = Object.keys(S.jaws).length > 0, seeds = Object.values(S.jaws).reduce((a, J) => a + J.seeds.length, 0);
     $('caseT').textContent = S.C.patient.name || S.C.key; $('caseS').textContent = 'Mã hồ sơ ' + S.C.code + ' · tự lưu trên máy này';
     $('tU').hidden = !S.jaws.upper; $('tL').hidden = !S.jaws.lower; $('markU').hidden = !S.jaws.upper || !!S.mark; $('markL').hidden = !S.jaws.lower || !!S.mark;
-    const aa = $('aiAll'); aa.hidden = false; aa.disabled = S.scan.busy; aa.textContent = S.scan.busy ? 'Đang phân tích…' : 'Phân tích';
+    $('aiAll').hidden = true;
     $('stat').innerHTML = '<b>' + seeds + '</b> răng đã đánh dấu';
     const sb = $('sb'), top = sb.scrollTop; let h = '';
     if (S.tab === 'doc') h = docPanel();
-    else if (S.tab === 'care') h = svcPanel('done') + '<div style="margin-top:6px">' + callPanel() + '</div>';
-    else if (S.tab === 'todo') h = svcPanel('todo');
-    else if (S.tab === 'scan') h = scanPanel();
-    else {
-      h = archStrip();
-      if (S.sel != null) h += toothPanel(S.sel);
-      else h += seeds ? '<p class="muted">Bấm vào một răng trên mô hình, hoặc số răng ở sơ đồ trên, để ghi nhận thăm khám của bác sĩ cho răng đó: đã tư vấn gì, đã làm gì, ghi chú.</p>' : '<div class="callout">Chưa có răng nào trên mô hình. Sang tab "Quét AI" để máy nhận diện răng.</div>';
-    }
+    else if (S.tab === 'care') h = callPanel();
+    else if (S.tab === 'scan') h = aiPanel();
+    else h = examPanel();
     const act = document.activeElement && document.activeElement.id; sb.innerHTML = h; sb.scrollTop = top;
     if (act && $(act) && /^f(svc|who|text|date)$/.test(act)) $(act).focus();
     $('vT').checked = S.tint;
+    if (S.tab === 'doc' && $('pvf')) { try { $('pvf').srcdoc = window.buildReport(reportCtx()); } catch (e) { console.error(e); } }
   }
 
   /* ---- tô sáng răng theo dịch vụ, tick răng, đảo số, đặt lại vị trí ---- */
@@ -898,8 +834,10 @@
     if (t.id === 'addsvc') { const v = $('newsvc').value.trim(); if (!v) return; S.C.services = S.C.services || []; if (!allServices().some((x) => norm(x) === norm(v))) S.C.services.push(v); persist(); S.care.open = 'done|' + norm(v); setPin(v, 'done'); render(); return; }
     if (t.id === 'runai') runAi(S.sel);
     if (t.id === 'airep') runPlan();
-    if (t.id === 'pladd') { (S.C.plan = S.C.plan || { items: [] }).items.push({ group: 'soon', title: '', teeth: [], why: '', outcome: '', risk: '', when: '', visits: '' }); persist(); render(); }
+    if (false) { (S.C.plan = S.C.plan || { items: [] }).items.push({ group: 'soon', title: '', teeth: [], why: '', outcome: '', risk: '', when: '', visits: '' }); persist(); render(); }
     if (t.dataset && t.dataset.pld !== undefined) { S.C.plan.items.splice(+t.dataset.pld, 1); persist(); render(); }
+    if (t.dataset && t.dataset.pdx !== undefined) { S.C.plan.problems.splice(+t.dataset.pdx, 1); persist(); repaintAll(); render(); }
+    if (t.id === 'nwadd') { const ti = $('nwt').value.trim(); if (!ti) { toast('Nhập tên hạng mục'); return; } const P2 = (S.C.plan = S.C.plan || { problems: [], items: [] }); P2.items.push({ group: $('nwg').value, title: ti, teeth: $('nwf').value.split(/[ ,;]+/).map(Number).filter((f) => ORDER.indexOf(f) >= 0), outcome: '', when: '', visits: '' }); persist(); render(); }
     if (t.id === 'pdf') exportPdf();
     if (t.id === 'stdcare') { [['Gọi hỏi thăm sau buổi khám / điều trị', 7, false], ['Nhắc cạo vôi, kiểm tra định kỳ', 180, true], ['Tái khám tổng quát', 365, true]].forEach((x) => S.C.care.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 5), title: x[0], due: addDays(x[1]), done: false, show: x[2], note: '' })); persist(); render(); }
     if (t.id === 'cadd') { const title = $('ctitle').value.trim(); if (!title) { toast('Nhập nội dung lịch'); return; } S.C.care.push({ id: Date.now().toString(36), title, due: $('cdue').value || addDays(7), done: false, show: $('cshow').checked, note: $('cnote').value.trim() }); persist(); render(); }
@@ -1006,7 +944,7 @@
       enterCase();
     } catch (err) { console.error(err); toast('Không mở được hồ sơ: ' + cleanErr(err)); } finally { $('busy').hidden = true; }
   }
-  function enterCase() { S.vol = null; S.ctBusy = false; S.ctErr = ""; fxClear(); S.sel = null; S.mark = null; S.tab = 'scan'; S.care = { open: null, pin: null }; S.scan = { busy: false, phase: '', jaw: '', done: 0, total: 0, fail: [], err: '', cur: null, cancel: false, warn: [] }; $('hud').hidden = true; S.tint = true; syncTabs(); show('case'); resize(); fitAll(); setView('front'); $('vU').checked = true; $('vL').checked = true; Object.values(S.jaws).forEach((J) => (J.mesh.visible = true)); applyMarks(); render(); markGuide(); }
+  function enterCase() { S.C.plan = S.C.plan || {}; S.C.plan.items = S.C.plan.items || []; S.C.plan.problems = S.C.plan.problems || []; S.vol = null; S.ctBusy = false; S.ctErr = ""; fxClear(); S.sel = null; S.mark = null; S.tab = 'scan'; S.care = { open: null, pin: null }; S.scan = { busy: false, phase: '', jaw: '', done: 0, total: 0, fail: [], err: '', cur: null, cancel: false, warn: [] }; $('hud').hidden = true; S.tint = true; syncTabs(); show('case'); resize(); fitAll(); setView('front'); $('vU').checked = true; $('vL').checked = true; Object.values(S.jaws).forEach((J) => (J.mesh.visible = true)); applyMarks(); render(); markGuide(); }
 
   /* ================= home ================= */
   function pendingOf(C) { let n = 0; Object.keys(C.teeth || {}).forEach((f) => { const m = new Map(); (C.teeth[f] || []).forEach((e) => { if (!e.svc) return; const k = norm(e.svc); const o = m.get(k) || { done: false }; if (e.kind === 'done') o.done = true; if (e.kind === 'advice' || e.kind === 'done') m.set(k, o); }); m.forEach((o) => { if (!o.done) n++; }); }); return n; }

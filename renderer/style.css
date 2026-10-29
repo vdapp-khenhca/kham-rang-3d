@@ -120,3 +120,8 @@ img.pano{cursor:zoom-in}
 details.card>summary{cursor:pointer;padding:2px 0}
 details.card[open]>summary{margin-bottom:8px}
 dialog::backdrop{background:rgba(0,0,0,.35)}
+.pr{display:flex;gap:10px;padding:7px 0;border-bottom:1px solid var(--line,#e3e3e3);align-items:flex-start}
+.pr:last-child{border-bottom:0}
+.gh{margin:12px 0 4px;font-size:.95rem}
+.pi{padding:6px 0;border-bottom:1px solid var(--line,#e3e3e3)}
+.pi:last-child{border-bottom:0}
