@@ -128,9 +128,10 @@
     const { U, V, H, crown, region, seeds, n, occ } = J, N = region.length, sg = occ.dot(n) >= 0 ? 1 : -1;
     seeds.forEach((s) => { s.u = s.p.x * J.e1.x + s.p.y * J.e1.y + s.p.z * J.e1.z; s.v = s.p.x * J.e2.x + s.p.y * J.e2.y + s.p.z * J.e2.z; });
     seeds.forEach((s) => { let dm = 1e9; seeds.forEach((o) => { if (o !== s) { const d = Math.hypot(o.p.x - s.p.x, o.p.y - s.p.y, o.p.z - s.p.z); if (d < dm) dm = d; } }); s.rad2 = Math.pow(Math.min(7.5, Math.max(3.8, dm * 0.62)), 2); });
-    const gd = J.grid, gmap = {}; if (gd) seeds.forEach((q, k) => (gmap[q.f] = k));
+    const gd = J.grid, vl = J.vlab, gmap = {}; if (gd || vl) seeds.forEach((q, k) => (gmap[q.f] = k));
     for (let i = 0; i < N; i++) {
       region[i] = -1; if (!crown[i] || !seeds.length) continue;
+      if (vl) { const f = vl[i]; if (f && gmap[f] !== undefined) region[i] = gmap[f]; continue; }
       if (gd) { const x = Math.floor((U[i] - gd.u0) / gd.R), y = Math.floor((V[i] - gd.v0) / gd.R); if (x >= 0 && y >= 0 && x < gd.W && y < gd.H) { const f = gd.lab[y * gd.W + x]; if (f && gmap[f] !== undefined) region[i] = gmap[f]; } continue; }
       let best = -1, bd = 1e9;
       for (let k = 0; k < seeds.length; k++) { const du = U[i] - seeds[k].u, dv = V[i] - seeds[k].v, d = du * du + dv * dv, s = (H[i] - seeds[k].h) * sg; if (d < bd && d < seeds[k].rad2 && s > -10 && s < 4.5) { bd = d; best = k; } }
@@ -142,7 +143,7 @@
   function aiLatest(f) { const by = {}; teethLog(f).forEach((e) => { if (e.kind === 'ai') by[e.src || 'scan'] = e; }); return Object.keys(by).sort().map((k) => by[k]); }
   function svcMap(f) {
     const m = new Map(), log = teethLog(f), get = (n) => { const k = norm(n); if (!m.has(k)) m.set(k, { name: n, ai: null, advice: [], done: [] }); return m.get(k); };
-    aiLatest(f).forEach((lastAi) => { if (lastAi && lastAi.ai) (lastAi.ai.services || []).forEach((s) => { if (s && s.name) { const o = get(s.name); if (!o.ai || (s.priority === 'cao' && o.ai.priority !== 'cao')) o.ai = { priority: s.priority, why: s.why, date: lastAi.date, src: lastAi.src || '' }; } }); });
+    aiLatest(f).forEach((lastAi) => { if (lastAi && lastAi.ai) (lastAi.ai.services || []).forEach((s) => { if (s && s.name) { const o = get(s.name); if (!o.ai || (s.priority === 'cao' && o.ai.priority !== 'cao')) o.ai = { priority: s.priority, why: s.why, when: s.when, outcome: s.outcome, risk: s.risk, date: lastAi.date, src: lastAi.src || '' }; } }); });
     log.forEach((e) => { if (e.kind === 'advice' && e.svc) get(e.svc).advice.push(e); if (e.kind === 'done' && e.svc) get(e.svc).done.push(e); });
     return m;
   }
@@ -203,13 +204,15 @@
   function repaintAll() { Object.values(S.jaws).forEach(paint); buildLabels(); }
   function encGrid(g) { if (!g) return null; const r = []; let v = g.lab[0], c = 0; for (let i = 0; i < g.lab.length; i++) { if (g.lab[i] === v && c < 60000) c++; else { r.push(v, c); v = g.lab[i]; c = 1; } } r.push(v, c); return { u0: +g.u0.toFixed(3), v0: +g.v0.toFixed(3), R: g.R, W: g.W, H: g.H, rle: r }; }
   function decGrid(e) { if (!e || !e.rle) return null; const lab = new Int8Array(e.W * e.H); let p = 0; for (let i = 0; i < e.rle.length; i += 2) { lab.fill(e.rle[i], p, p + e.rle[i + 1]); p += e.rle[i + 1]; } return { u0: e.u0, v0: e.v0, R: e.R, W: e.W, H: e.H, lab }; }
-  function mapGrid(J, fn) { if (J.grid) { const l = J.grid.lab; for (let i = 0; i < l.length; i++) if (l[i]) l[i] = fn(l[i]); } }
+  function encV(v) { if (!v) return null; const r = []; let c = v[0], n = 0; for (let i = 0; i < v.length; i++) { if (v[i] === c) n++; else { r.push(c, n); c = v[i]; n = 1; } } r.push(c, n); return { n: v.length, rle: r }; }
+  function decV(e, N) { if (!e || !e.rle || e.n !== N) return null; const v = new Int8Array(N); let p = 0; for (let i = 0; i < e.rle.length; i += 2) { v.fill(e.rle[i], p, p + e.rle[i + 1]); p += e.rle[i + 1]; } return v; }
+  function mapGrid(J, fn) { if (J.vlab) { const l = J.vlab; for (let i = 0; i < l.length; i++) if (l[i]) l[i] = fn(l[i]); } if (J.grid) { const l = J.grid.lab; for (let i = 0; i < l.length; i++) if (l[i]) l[i] = fn(l[i]); } }
   function applyMarks() {
-    ['upper', 'lower'].forEach((n) => { const J = S.jaws[n]; if (!J) return; J.seeds = ((S.C.marks[n]) || []).map((s) => ({ f: s.f, p: new THREE.Vector3(s.x, s.y, s.z), h: s.h })); J.grid = decGrid(S.C.marks.grid && S.C.marks.grid[n]); recompute(J); });
+    ['upper', 'lower'].forEach((n) => { const J = S.jaws[n]; if (!J) return; J.seeds = ((S.C.marks[n]) || []).map((s) => ({ f: s.f, p: new THREE.Vector3(s.x, s.y, s.z), h: s.h })); J.grid = decGrid(S.C.marks.grid && S.C.marks.grid[n]); J.vlab = decV(S.C.marks.vlab && S.C.marks.vlab[n], J.crown.length); recompute(J); });
     repaintAll();
   }
   function saveMarks() {
-    S.C.marks.grid = S.C.marks.grid || {}; ['upper', 'lower'].forEach((n) => { const J = S.jaws[n]; if (J) S.C.marks.grid[n] = encGrid(J.grid); });
+    S.C.marks.grid = S.C.marks.grid || {}; ['upper', 'lower'].forEach((n) => { const J = S.jaws[n]; if (J) S.C.marks.grid[n] = encGrid(J.grid); S.C.marks.vlab = S.C.marks.vlab || {}; S.C.marks.vlab[n] = encV(J.vlab); });
     ['upper', 'lower'].forEach((n) => { const J = S.jaws[n]; if (J) S.C.marks[n] = J.seeds.map((s) => ({ f: s.f, x: +s.p.x.toFixed(3), y: +s.p.y.toFixed(3), z: +s.p.z.toFixed(3), h: +s.h.toFixed(3) })); });
     persist();
   }
@@ -220,7 +223,7 @@
     return { p: new THREE.Vector3(sx / c, sy / c, sz / c), h: sh / c };
   }
   function placeSeed(J, hitPoint, f) {
-    const sn = snapSeed(J, hitPoint), old = J.seeds.findIndex((s) => s.f === f), s = { f, p: sn.p, h: sn.h }; J.grid = null;
+    const sn = snapSeed(J, hitPoint), old = J.seeds.findIndex((s) => s.f === f), s = { f, p: sn.p, h: sn.h }; J.grid = null; J.vlab = null;
     if (old >= 0) J.seeds[old] = s; else J.seeds.push(s);
     S.C.marks.missing = S.C.marks.missing.filter((x) => x !== f);
     recompute(J); repaintAll(); saveMarks();
@@ -335,15 +338,22 @@
   }
 
   /* ================= AI (GPT through the main process; the key never reaches this page) ================= */
+  function otherCtx(f) {
+    const parts = aiLatest(f).filter((e) => e.src === 'pano' || e.src === 'ct').map((e) => (e.src === 'ct' ? 'CT 3D' : 'X-quang') + ': ' + (e.ai && e.ai.impression || ''));
+    const g = []; if (S.C.pano && S.C.pano.result && S.C.pano.result.summary) g.push('tổng quan X-quang: ' + S.C.pano.result.summary); if (S.C.ct && S.C.ct.result && S.C.ct.result.summary) g.push('tổng quan CT: ' + S.C.ct.result.summary);
+    return parts.concat(g.slice(0, 2)).filter(Boolean).join(' | ');
+  }
   async function aiTooth(f) {
+    const ctxX = otherCtx(f);
     const imgs = await toothImages(f), jaw = jawOf(f) === 'upper' ? 'hàm trên' : 'hàm dưới', miss = S.C.marks.missing.filter((x) => jawOf(x) === jawOf(f)).join(', ') || 'không có';
     const prompt = 'BỆNH ÁN: ghi nhận trên mô hình scan 3D trong miệng (có màu), răng số ' + f + ' (FDI, ' + jaw + '). Ba ảnh: (1) nhìn từ mặt nhai, (2) từ phía ngoài (môi/má), (3) từ phía trong (lưỡi/vòm). Vòng tròn trắng có số là vị trí răng đang xét; các răng khác cũng có số.\n' +
       'Răng đã đánh dấu mất ở hàm này: ' + miss + '.\n' +
+      (ctxX ? 'DỮ LIỆU KHÁC CỦA CÙNG RĂNG NÀY (đã đọc từ X-quang hoặc CT, cho biết phần bên trong mà scan bề mặt không thấy): ' + ctxX + '\nHãy KẾT HỢP: scan cho thấy bề mặt, X-quang/CT cho thấy chân răng, tủy, xương. Điều nào hai nguồn xác nhận cho nhau thì nêu rõ là có cả hai nguồn; điều nào mâu thuẫn thì ghi vào review.\n' : '') +
       'BƯỚC 0 - KIỂM TRA SỐ RĂNG (bắt buộc): đối chiếu hình thái răng ở vị trí được đánh dấu với số ' + f + ' (răng cửa, nanh, tiền hàm, hàm lớn; số múi, số chân suy ra từ hình dạng mặt nhai; vị trí so với đường giữa; răng khôn). Nếu hình thái hoặc vị trí KHÔNG phù hợp với số này thì đặt numberOk=false và mô tả trong numberNote số răng có vẻ đúng hơn. Nếu không đủ cơ sở thì numberOk=true.\n' +
       'BƯỚC 1 - KHÁM THEO CHUYÊN KHOA RĂNG HÀM MẶT, chỉ ghi điều NHÌN THẤY: (a) mô cứng: sâu men/ngà theo mức độ (đốm trắng đục, nâu, hố rãnh đen, mất cấu trúc), vết nứt, mẻ, mòn mặt nhai hoặc mòn cổ răng, dấu hiệu nghiến (mặt mòn phẳng, mất múi); (b) phục hình sẵn có: trám, mão, cầu, implant, chất lượng bờ, màu sắc so với răng bên, lộ viền kim loại; (c) mô nha chu: màu và hình dạng nướu, viêm đỏ/phù, tụt nướu, lộ chân răng, vôi răng, mảng bám; (d) khớp cắn và vị trí: xoay, nghiêng, chen chúc, thưa, trồi hoặc lún, khoảng trống do mất răng kế cận, răng khôn mọc lệch; (e) răng sữa còn sót nếu có.\n' +
       'BƯỚC 2 - SUY LUẬN LÂM SÀNG: chỉ ra nguy cơ tiến triển nếu không xử lý (ví dụ sâu lan vào tủy, nứt vỡ, viêm nha chu, lệch khớp cắn). Dùng "có thể", "nghi ngờ"; KHÔNG khẳng định chẩn đoán từ ảnh scan. Sâu kẽ, sâu dưới mão, tình trạng tủy, tiêu xương, thấu quang chóp, tình trạng chân răng cần X-quang hoặc test lâm sàng thì ghi vào review.\n' +
       'Dịch vụ đề xuất chọn từ: ' + CATALOG.join('; ') + ' (có thể thêm tên khác ngắn gọn). Chỉ đề xuất khi có căn cứ nhìn thấy; răng ổn thì chỉ cần "Theo dõi định kỳ". priority "cao" chỉ dùng khi có dấu hiệu rõ cần can thiệp sớm.\n' +
-      'Trả về JSON: {"numberOk":true,"numberNote":"","observations":["..."],"impression":"nhận định 1-2 câu, dễ hiểu","services":[{"name":"...","priority":"cao|trung bình|thấp","why":"1 câu"}],"review":["điều cần bác sĩ xác nhận"]}. Viết tiếng Việt.';
+      'Trả về JSON: {"numberOk":true,"numberNote":"","observations":["..."],"impression":"nhận định 1-2 câu, dễ hiểu","services":[{"name":"...","priority":"cao|trung bình|thấp","why":"1 câu","when":"ngay|1-3 tháng|sau 6 tháng|theo dõi","outcome":"kết quả mong đợi","risk":"nguy cơ nếu không làm"}],"review":["điều cần bác sĩ xác nhận"]}. Viết tiếng Việt.';
     const res = await window.api.ai.run({ prompt, images: imgs });
     const rv = (res.review || []).slice(0, 5); if (res.numberOk === false) rv.unshift('⚠ Số răng trên mô hình có thể sai: ' + String(res.numberNote || 'hình thái không khớp số ' + f) + '. Bác sĩ kiểm tra lại.');
     return { numberOk: res.numberOk !== false, observations: (res.observations || []).slice(0, 8), impression: res.impression || '', services: (res.services || []).slice(0, 6), review: rv };
@@ -377,7 +387,7 @@
         '<div class="hbtns"><button class="btn" type="button" data-hud="ok">Số răng đúng, bắt đầu AI quét</button><button class="btn ghost sm" type="button" data-hud="stop">Hủy</button></div>'; return;
     }
     const jn = sc.jaw === 'upper' ? 'Hàm trên' : sc.jaw === 'lower' ? 'Hàm dưới' : '';
-    const title = sc.phase === 'detect' ? 'Đang nhận diện răng · ' + jn : sc.phase === 'ai' ? 'AI đang quét · ' + jn : sc.phase === 'pano' ? 'AI đang đọc ảnh X-quang' : sc.phase === 'ct' ? 'AI đang đọc CT 3D' : 'Đang soạn nhận định tổng quan';
+    const title = sc.phase === 'detect' ? 'Đang nhận diện răng · ' + jn : sc.phase === 'ai' ? 'AI đang quét · ' + jn : sc.phase === 'pano' ? 'AI đang đọc ảnh X-quang' : sc.phase === 'ct' ? 'AI đang đọc CT 3D' : 'Đang tổng hợp scan, X-quang, CT thành kế hoạch điều trị';
     const sub = sc.phase === 'ai' ? 'Răng ' + (sc.cur || '…') + ' · ' + sc.done + '/' + sc.total : sc.phase === 'detect' ? 'Tìm ranh giới và số thứ tự từng răng' : 'Gần xong';
     const pct = sc.phase === 'ai' && sc.total ? Math.round((100 * sc.done) / sc.total) : sc.phase === 'detect' ? 8 : 96;
     h.innerHTML = '<div class="hrow"><b>' + esc(title) + '</b><button class="btn ghost sm" type="button" data-hud="stop">Dừng</button></div><div class="hsub">' + esc(sub) + '</div><div class="pb"><i style="width:' + pct + '%"></i></div>';
@@ -401,10 +411,10 @@
     else if (k === 'ok') { sc.confirmed = true; if (sc.resolve) sc.resolve(); }
   });
   async function detectJaw(jn) {
-    const J = S.jaws[jn]; S.scan.phase = 'detect'; S.scan.jaw = jn; renderHud(); viewJawOnly(jn); J.sweep = null; J.seeds = []; J.grid = null; recompute(J); buildLabels(); await sleep(350);
+    const J = S.jaws[jn]; S.scan.phase = 'detect'; S.scan.jaw = jn; renderHud(); viewJawOnly(jn); J.sweep = null; J.seeds = []; J.grid = null; J.vlab = null; recompute(J); buildLabels(); await sleep(350);
     const r = window.detectTeeth(J, jn, THREE);
     if (!r || r.seeds.length < 4) { S.scan.warn.push('Không nhận diện được ' + (jn === 'upper' ? 'hàm trên' : 'hàm dưới') + ', hãy bấm "Đánh dấu thủ công" cho hàm này.'); return false; }
-    J.grid = r.grid;     J.sweep = r.sweep; J.seeds = r.seeds.map((q) => ({ f: q.f, p: q.p, h: q.h, show: false }));
+    J.grid = r.grid; J.vlab = r.vlab || null;     J.sweep = r.sweep; J.seeds = r.seeds.map((q) => ({ f: q.f, p: q.p, h: q.h, show: false }));
     S.C.marks.missing = S.C.marks.missing.filter((x) => jawOf(x) !== jn).concat(r.missing);
     recompute(J); saveMarks(); S.C.detect = S.C.detect || {}; S.C.detect[jn] = { auto: true, date: todayIso(), flipped: !!r.flipped, scale: r.scale }; persist();
     buildLabels(); render(); const dur = 2600; FX.sweep = { jaw: jn, t0: performance.now(), dur }; await sleep(dur + 250); FX.sweep = null; J.seeds.forEach((q) => (q.show = true)); repaintAll(); render();
@@ -443,14 +453,14 @@
         const plan = {}; let total = 0;
         for (const jn of ['upper', 'lower']) { const J = S.jaws[jn]; if (!J || !J.seeds.length) { plan[jn] = []; continue; } let list = J.seeds.map((q) => q.f).filter((f) => !isMissing(f)).sort((a, b) => ordOf(a) - ordOf(b)); if (!opts.all) list = list.filter((f) => !teethLog(f).some((e) => e.kind === 'ai' && !e.src)); plan[jn] = list; total += list.length; }
         sc.total = total;
+        if (!sc.cancel && S.C && S.C.pano && S.pano.url && (opts.all || !S.C.pano.result)) { sc.phase = 'pano'; renderHud(); await runPano(true); }
+        if (!sc.cancel && S.C && S.C.ct && (opts.all || !S.C.ct.result)) { sc.phase = 'ct'; renderHud(); await runCt(true); }
         for (const jn of ['upper', 'lower']) {
           const list = plan[jn]; if (!list || !list.length || sc.cancel || !S.C) continue; sc.phase = 'ai'; sc.jaw = jn; viewJawOnly(jn); renderHud(); await sleep(300);
           let i = 0; const worker = async () => { while (i < list.length && !sc.cancel && S.C) { const f = list[i++]; await scanOne(f); await sleep(120); } };
           await Promise.all([worker(), worker(), worker()]);
         }
-        if (!sc.cancel && S.C && S.C.pano && S.pano.url && !S.C.pano.result) { sc.phase = 'pano'; renderHud(); await runPano(true); }
-        if (!sc.cancel && S.C && S.C.ct && !S.C.ct.result) { sc.phase = 'ct'; renderHud(); await runCt(true); }
-        if (!sc.cancel && S.C && !sc.fail.length && (opts.all || !S.C.report.summary) && Object.keys(S.C.teeth).length) { sc.phase = 'report'; renderHud(); await aiReport(true); }
+        if (!sc.cancel && S.C && !sc.fail.length && Object.keys(S.C.teeth).length) { sc.phase = 'report'; renderHud(); await runPlan(true); }
       }
     } catch (e) { console.error(e); sc.err = cleanErr(e); }
     const bad = sc.fail.length, cancelled = sc.cancel; sc.busy = false; sc.phase = ''; fxClear(); renderHud();
@@ -502,7 +512,7 @@
         '4) Cấu trúc giải phẫu: xoang hàm (dày niêm mạc, mờ, polyp, đáy xoang liên quan chóp răng trên), ống răng dưới (đường đi, khoảng cách tới chóp răng cần can thiệp), lỗ cằm, vách ngăn mũi, khớp thái dương hàm (lồi cầu, ổ chảo), đường thở nếu thấy, xương hàm: nang, u, tổn thương thấu quang hay cản quang, vôi hóa.\n' +
         '5) Đối chiếu với scan 3D: răng nào scan ghi có mà CT không thấy (hoặc ngược lại) thì ghi vào "mismatch".\n' +
         'Dịch vụ đề xuất chọn từ: ' + CATALOG.join('; ') + ' (có thể thêm tên ngắn gọn); chỉ khi có căn cứ trên CT; priority "cao" khi cần xử lý sớm (thấu quang quanh chóp, nang, răng ngầm gây biến chứng, nhiễm trùng nghi ngờ).\n' +
-        'Trả về JSON: {"quality":"chất lượng ảnh, nhiễu do kim loại, phần chưa đọc được","summary":"3-6 câu tổng quan","teeth":[{"f":36,"status":"co|mat|implant|ngam|chan_sot","text":"nhận định ngắn cho răng này","services":[{"name":"...","priority":"cao|trung bình|thấp","why":"1 câu"}]}],"sections":{"xuong_nha_chu":"...","xoang_ham":"...","ong_rang_duoi":"...","khop_thai_duong_ham":"...","bat_thuong_khac":"..."},"general":["điều chung cần lưu ý"],"mismatch":["đối chiếu với scan 3D"],"review":["điều cần bác sĩ xác nhận trực tiếp trên phần mềm CT, đo đạc cần làm"]}. Chỉ liệt kê trong "teeth" các răng có điều đáng ghi hoặc trạng thái đặc biệt. Viết tiếng Việt.';
+        'Trả về JSON: {"quality":"chất lượng ảnh, nhiễu do kim loại, phần chưa đọc được","summary":"3-6 câu tổng quan","teeth":[{"f":36,"status":"co|mat|implant|ngam|chan_sot","text":"nhận định ngắn cho răng này","services":[{"name":"...","priority":"cao|trung bình|thấp","why":"1 câu","when":"ngay|1-3 tháng|sau 6 tháng|theo dõi","outcome":"kết quả mong đợi","risk":"nguy cơ nếu không làm"}]}],"sections":{"xuong_nha_chu":"...","xoang_ham":"...","ong_rang_duoi":"...","khop_thai_duong_ham":"...","bat_thuong_khac":"..."},"general":["điều chung cần lưu ý"],"mismatch":["đối chiếu với scan 3D"],"review":["điều cần bác sĩ xác nhận trực tiếp trên phần mềm CT, đo đạc cần làm"]}. Chỉ liệt kê trong "teeth" các răng có điều đáng ghi hoặc trạng thái đặc biệt. Viết tiếng Việt.';
       const res = await window.api.ai.run({ prompt, images: shots });
       const finds = (res.teeth || []).filter((x) => ORDER.indexOf(+x.f) >= 0).slice(0, 32), date = todayIso(), sec = res.sections && typeof res.sections === 'object' ? res.sections : {};
       const lbl = { xuong_nha_chu: 'Xương và nha chu', xoang_ham: 'Xoang hàm', ong_rang_duoi: 'Ống răng dưới', khop_thai_duong_ham: 'Khớp thái dương hàm', bat_thuong_khac: 'Bất thường khác' };
@@ -554,7 +564,7 @@
         '5) Cấu trúc: xoang hàm (dày niêm mạc, mờ, đáy xoang gần chóp), ống răng dưới, lỗ cằm (khoảng cách tới chóp răng cần can thiệp), khớp thái dương hàm (lồi cầu), góc hàm, xương móng, bất thường khác (nang, tổn thương thấu quang hoặc cản quang, vôi hóa).\n' +
         '6) Đối chiếu với scan 3D: răng nào scan 3D ghi có mà phim không thấy (hoặc ngược lại) thì ghi vào "mismatch".\n' +
         'Dịch vụ đề xuất chọn từ: ' + CATALOG.join('; ') + ' (có thể thêm tên ngắn gọn); chỉ khi có căn cứ trên phim; priority "cao" khi cần xử lý sớm (thấu quang quanh chóp, sâu sát tủy, nhiễm trùng nghi ngờ, răng ngầm gây biến chứng).\n' +
-        'Trả về JSON: {"quality":"nhận xét chất lượng phim","summary":"3-5 câu tổng quan","teeth":[{"f":36,"status":"co|mat|implant|ngam|chan_sot","text":"nhận định ngắn cho răng này","services":[{"name":"...","priority":"cao|trung bình|thấp","why":"1 câu"}]}],"sections":{"xuong_nha_chu":"...","xoang_ham":"...","ong_rang_duoi":"...","khop_thai_duong_ham":"...","bat_thuong_khac":"..."},"general":["điều chung cần lưu ý"],"mismatch":["đối chiếu với scan 3D"],"review":["điều cần bác sĩ xác nhận, nên chụp thêm gì (CBCT, phim cận chóp...)"]}. Chỉ liệt kê trong "teeth" các răng có điều đáng ghi hoặc trạng thái đặc biệt (mất, ngầm, implant). Viết tiếng Việt.';
+        'Trả về JSON: {"quality":"nhận xét chất lượng phim","summary":"3-5 câu tổng quan","teeth":[{"f":36,"status":"co|mat|implant|ngam|chan_sot","text":"nhận định ngắn cho răng này","services":[{"name":"...","priority":"cao|trung bình|thấp","why":"1 câu","when":"ngay|1-3 tháng|sau 6 tháng|theo dõi","outcome":"kết quả mong đợi","risk":"nguy cơ nếu không làm"}]}],"sections":{"xuong_nha_chu":"...","xoang_ham":"...","ong_rang_duoi":"...","khop_thai_duong_ham":"...","bat_thuong_khac":"..."},"general":["điều chung cần lưu ý"],"mismatch":["đối chiếu với scan 3D"],"review":["điều cần bác sĩ xác nhận, nên chụp thêm gì (CBCT, phim cận chóp...)"]}. Chỉ liệt kê trong "teeth" các răng có điều đáng ghi hoặc trạng thái đặc biệt (mất, ngầm, implant). Viết tiếng Việt.';
       const res = await window.api.ai.run({ prompt, images: shots });
       const finds = (res.teeth || res.findings || []).filter((x) => ORDER.indexOf(+x.f) >= 0).slice(0, 32), date = todayIso(), sec = res.sections && typeof res.sections === 'object' ? res.sections : {};
       const lbl = { xuong_nha_chu: 'Xương và nha chu', xoang_ham: 'Xoang hàm', ong_rang_duoi: 'Ống răng dưới', khop_thai_duong_ham: 'Khớp thái dương hàm', bat_thuong_khac: 'Bất thường khác' };
@@ -565,18 +575,34 @@
       persist(); repaintAll(); if (!quiet) toast('Đã đọc xong phim X-quang');
     } catch (e) { S.pano.err = cleanErr(e); } finally { S.pano.busy = false; if (!quiet) render(); }
   }
-  async function aiReport(quiet) {
+  const GRP = { now: 'Cần làm ngay', soon: 'Nên làm trong 1–3 tháng', later: 'Có thể cân nhắc sau' };
+  async function runPlan(quiet) {
     if (!S.hasKey) { toast('Chưa có khóa API. Vào Cài đặt để nhập khóa OpenAI.'); return; }
     S.rep = { busy: true, err: '' }; if (!quiet) render();
     try {
-      const rows = reportRows(), P = S.C.patient;
-      const prompt = 'Soạn nội dung phiếu khám gửi cho khách hàng dựa trên dữ liệu sau (không có dữ liệu thì không bịa).\nKhách: năm sinh ' + (P.year || 'không rõ') + ', giới tính ' + (P.gender || 'không rõ') + ', tiền sử: ' + (P.history || 'không ghi') + '.\nRăng đã mất: ' + (S.C.marks.missing.join(', ') || 'không có') + '.\nDữ liệu từng răng (JSON): ' + JSON.stringify(rows.map((r) => ({ rang: r.f, nhan_xet: r.note, da_lam: r.done.map((d) => d.name), can_lam_hoac_theo_doi: r.todo.map((d) => d.name) }))) + '\n' +
-        'Yêu cầu: giọng văn trung lập, dễ hiểu cho người không chuyên; không nhắc giá, không ưu đãi, không thúc ép; không dọa. Mỗi ý khuyên dặn là hành động cụ thể. Phần rủi ro nêu điều có thể xảy ra nếu không xử lý hoặc không theo dõi, dùng từ "có thể".\n' +
-        'Trả về JSON: {"summary":"3-5 câu tổng quan tình trạng","advice":["3-6 lời khuyên"],"risks":["3-5 điều cần lưu ý trong tương lai"]}. Viết tiếng Việt.';
+      const rows = reportRows(), P = S.C.patient, C = S.C;
+      const data = rows.map((r) => {
+        const m = svcMap(r.f), sv = []; m.forEach((s) => { if (!s.done.length && s.ai) sv.push({ ten: s.name, uu_tien: s.ai.priority, ly_do: s.ai.why, khi: s.ai.when, nguon: s.ai.src || 'scan' }); });
+        return { rang: r.f, nhan_xet: r.note, da_lam: r.done.map((d) => d.name), de_xuat: sv };
+      });
+      const prompt = 'Bạn là bác sĩ răng hàm mặt lập KẾ HOẠCH ĐIỀU TRỊ TỔNG HỢP từ dữ liệu đã KẾT HỢP: scan 3D trong miệng (bề mặt) + ' + ((C.ct && C.ct.result) ? 'CT cắt lớp (chân răng, xương, tủy)' : (C.pano && C.pano.result) ? 'X-quang toàn cảnh' : 'không có phim') + '. Không có dữ liệu thì không bịa.\n' +
+        'Khách: năm sinh ' + (P.year || 'không rõ') + ', giới tính ' + (P.gender || 'không rõ') + ', tiền sử: ' + (P.history || 'không ghi') + '.\nRăng đã mất: ' + (C.marks.missing.join(', ') || 'không có') + '.\n' +
+        (C.pano && C.pano.result && C.pano.result.summary ? 'Tổng quan X-quang: ' + C.pano.result.summary + '\n' : '') + (C.ct && C.ct.result && C.ct.result.summary ? 'Tổng quan CT: ' + C.ct.result.summary + '\n' : '') +
+        'Dữ liệu từng răng (JSON): ' + JSON.stringify(data) + '\n' +
+        'YÊU CẦU: gom các việc thành kế hoạch theo thứ tự ưu tiên lâm sàng (cấp cứu/đau/nhiễm trùng và bệnh nha chu trước, rồi bảo tồn, nội nha, phục hình, cấy ghép, chỉnh nha, thẩm mỹ). Gộp các răng cùng thủ thuật vào một mục. Chia 3 nhóm: "now" cần làm ngay, "soon" nên làm trong 1-3 tháng, "later" có thể cân nhắc sau. Mỗi mục có: title (tên thủ thuật), teeth (mảng số răng FDI), why (căn cứ từ scan và phim, nói rõ nguồn nào), outcome (kết quả mong đợi), risk (nguy cơ nếu không làm, dùng "có thể"), when (thời điểm dự kiến làm tiếp, ví dụ "trong 1-2 tuần", "sau 3 tháng"), visits (số lần hẹn và thời gian dự kiến). Giọng trung lập, không giá, không bán hàng, không dọa; điều chưa chắc ghi là cần bác sĩ xác nhận.\n' +
+        'Trả về JSON: {"summary":"tình trạng tổng quát 4-6 câu, nêu cả răng và nha chu/xương","items":[{"group":"now|soon|later","title":"","teeth":[],"why":"","outcome":"","risk":"","when":"","visits":""}],"advice":["3-6 lời khuyên"],"risks":["3-5 điều cần lưu ý nếu trì hoãn"]}. Viết tiếng Việt.';
       const res = await window.api.ai.run({ prompt, images: [] });
-      S.C.report.summary = String(res.summary || ''); S.C.report.advice = (res.advice || []).join('\n'); S.C.report.risks = (res.risks || []).join('\n');
-      S.rep = { busy: false, err: '' }; persist(); render(); if (!quiet) toast('Đã soạn xong. Hãy đọc lại và chỉnh trước khi xuất PDF.');
+      const items = (res.items || []).filter((x) => x && x.title).map((x) => ({ group: GRP[x.group] ? x.group : 'soon', title: String(x.title), teeth: (Array.isArray(x.teeth) ? x.teeth : String(x.teeth || '').split(/[ ,;]+/)).map(Number).filter(Boolean), why: String(x.why || ''), outcome: String(x.outcome || ''), risk: String(x.risk || ''), when: String(x.when || ''), visits: String(x.visits || '') }));
+      C.plan = { items }; C.report.summary = String(res.summary || ''); C.report.advice = (res.advice || []).join('\n'); C.report.risks = (res.risks || []).join('\n');
+      S.rep = { busy: false, err: '' }; persist(); render(); if (!quiet) toast('Đã lập kế hoạch. Bác sĩ đọc lại và chỉnh trước khi xuất PDF.');
     } catch (e) { S.rep = { busy: false, err: cleanErr(e) }; render(); }
+  }
+  const aiReport = runPlan;
+  function planPanel() {
+    const it = (S.C.plan && S.C.plan.items) || [];
+    return '<div class="card"><div class="row sp"><h3>Kế hoạch điều trị (kết hợp scan + phim)</h3><button class="btn ghost sm" type="button" id="pladd">Thêm mục</button></div>' +
+      (it.length ? it.map((x, i) => '<div class="plan" style="border:1px solid var(--line,#ddd);border-radius:8px;padding:8px;margin:6px 0"><div class="row"><select data-pl="' + i + ':group">' + Object.keys(GRP).map((g) => '<option value="' + g + '"' + (g === x.group ? ' selected' : '') + '>' + GRP[g] + '</option>').join('') + '</select><input type="text" data-pl="' + i + ':title" value="' + esc(x.title) + '" placeholder="Thủ thuật" style="flex:1"><input type="text" data-pl="' + i + ':teeth" value="' + esc((x.teeth || []).join(' ')) + '" placeholder="Răng" style="width:90px"><button class="btn ghost sm" type="button" data-pld="' + i + '">Xóa</button></div>' +
+        ['why:Căn cứ', 'outcome:Kết quả mong đợi', 'risk:Nguy cơ nếu không làm', 'when:Thời gian làm tiếp', 'visits:Số hẹn / thời gian'].map((k) => { const [a, l] = k.split(':'); return '<label class="f">' + l + '<input type="text" data-pl="' + i + ':' + a + '" value="' + esc(x[a]) + '"></label>'; }).join('') + '</div>').join('') : '<p class="muted small">Chưa có kế hoạch. Bấm "AI lập kế hoạch" bên dưới (hoặc chạy Quét AI).</p>') + '</div>';
   }
 
   /* ================= PDF ================= */
@@ -602,6 +628,7 @@
         advice: C.report.advice.split('\n').map((x) => x.trim()).filter(Boolean), risks: C.report.risks.split('\n').map((x) => x.trim()).filter(Boolean),
         shots: { upper: jawShot('upper'), lower: jawShot('lower') }, states, teethRows: rows,
         counts: { examined: Object.keys(C.teeth).filter((f) => teethLog(f).length).length, done, todo, missing: C.marks.missing.length },
+        plan: ((C.plan && C.plan.items) || []).map((x) => ({ group: x.group, title: x.title, teeth: (x.teeth || []).join(', '), why: x.why, outcome: x.outcome, risk: x.risk, when: x.when, visits: x.visits })),
         care: C.care.filter((t) => t.show && !t.done).sort((a, b) => a.due.localeCompare(b.due))
       };
       const name = 'PhieuKham_' + (C.patient.name || C.key).normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D').replace(/[^A-Za-z0-9]+/g, '_') + '_' + todayIso() + '.pdf';
@@ -731,7 +758,7 @@
       '<div class="f3"><label class="f">Năm sinh<input type="text" data-p="year" value="' + esc(P.year) + '"></label><label class="f">Giới tính<select data-p="gender">' + ['', 'Nam', 'Nữ'].map((g) => '<option' + (g === P.gender ? ' selected' : '') + '>' + g + '</option>').join('') + '</select></label><label class="f">Điện thoại<input type="text" data-p="phone" value="' + esc(P.phone) + '"></label></div>' +
       '<div class="f2"><label class="f">Bác sĩ khám<input type="text" data-p="doctor" value="' + esc(P.doctor) + '" placeholder="' + esc(S.cfg.clinic.doctor) + '"></label><label class="f">Ngày khám<input type="date" data-p="visitDate" value="' + esc(P.visitDate) + '"></label></div>' +
       '<label class="f">Tiền sử, lưu ý (dị ứng, bệnh nền, thuốc đang dùng)<textarea data-p="history">' + esc(P.history) + '</textarea></label></div></div>' +
-      '<div class="card"><div class="row sp"><h3>Nội dung phiếu gửi khách</h3><button class="btn sm" type="button" id="airep"' + (S.rep.busy ? ' disabled' : '') + '>' + (S.rep.busy ? 'Đang soạn…' : 'AI soạn nội dung') + '</button></div>' +
+      planPanel() + '<div class="card"><div class="row sp"><h3>Nội dung phiếu gửi khách</h3><button class="btn sm" type="button" id="airep"' + (S.rep.busy ? ' disabled' : '') + '>' + (S.rep.busy ? 'Đang soạn…' : 'AI lập kế hoạch + soạn phiếu') + '</button></div>' +
       (S.rep.err ? '<p class="err">' + esc(S.rep.err) + '</p>' : '') +
       '<label class="f">Nhận định tổng quan<textarea data-r="summary" style="min-height:110px">' + esc(R.summary) + '</textarea></label>' +
       '<label class="f">Lời khuyên (mỗi dòng một ý)<textarea data-r="advice" style="min-height:100px">' + esc(R.advice) + '</textarea></label>' +
@@ -835,7 +862,9 @@
     if (t.id === 'ctRun') runCt(false);
     if (t.id === 'addsvc') { const v = $('newsvc').value.trim(); if (!v) return; S.C.services = S.C.services || []; if (!allServices().some((x) => norm(x) === norm(v))) S.C.services.push(v); persist(); S.care.open = 'done|' + norm(v); setPin(v, 'done'); render(); return; }
     if (t.id === 'runai') runAi(S.sel);
-    if (t.id === 'airep') aiReport();
+    if (t.id === 'airep') runPlan();
+    if (t.id === 'pladd') { (S.C.plan = S.C.plan || { items: [] }).items.push({ group: 'soon', title: '', teeth: [], why: '', outcome: '', risk: '', when: '', visits: '' }); persist(); render(); }
+    if (t.dataset && t.dataset.pld !== undefined) { S.C.plan.items.splice(+t.dataset.pld, 1); persist(); render(); }
     if (t.id === 'pdf') exportPdf();
     if (t.id === 'stdcare') { [['Gọi hỏi thăm sau buổi khám / điều trị', 7, false], ['Nhắc cạo vôi, kiểm tra định kỳ', 180, true], ['Tái khám tổng quát', 365, true]].forEach((x) => S.C.care.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 5), title: x[0], due: addDays(x[1]), done: false, show: x[2], note: '' })); persist(); render(); }
     if (t.id === 'cadd') { const title = $('ctitle').value.trim(); if (!title) { toast('Nhập nội dung lịch'); return; } S.C.care.push({ id: Date.now().toString(36), title, due: $('cdue').value || addDays(7), done: false, show: $('cshow').checked, note: $('cnote').value.trim() }); persist(); render(); }
@@ -849,6 +878,7 @@
   $('sb').addEventListener('input', (e) => {
     const m = { fsvc: 'svc', fwho: 'who', ftext: 'text', fdate: 'date' }[e.target.id]; if (m) S.form[m] = e.target.value;
     if (e.target.dataset.p) { S.C.patient[e.target.dataset.p] = e.target.value; persist(); if (e.target.dataset.p === 'name') $('caseT').textContent = e.target.value; }
+    if (e.target.dataset.pl) { const [i, k] = e.target.dataset.pl.split(':'), x = S.C.plan.items[+i]; x[k] = k === 'teeth' ? e.target.value.split(/[ ,;]+/).map(Number).filter(Boolean) : e.target.value; persist(); if (k === 'group') render(); return; }
     if (e.target.dataset.r) { S.C.report[e.target.dataset.r] = e.target.value; persist(); }
   });
   $('sb').addEventListener('change', (e) => {

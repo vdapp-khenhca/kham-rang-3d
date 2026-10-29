@@ -1,7 +1,7 @@
 {
   "name": "kham-rang-3d",
   "productName": "Khám Răng 3D",
-  "version": "2.0.4",
+  "version": "2.0.5",
   "description": "Khám răng trên scan 3D, ghi dịch vụ từng răng, AI hỗ trợ và xuất phiếu khám PDF",
   "main": "main.js",
   "author": "Phòng khám",

@@ -45,6 +45,29 @@
     return { lab, n };
   }
 
+
+  function meshSegment(J, cell, cellF, W, Hh) {
+    const geo = J.geo, N = J.crown.length, idx = geo.index ? geo.index.array : null, P = geo.getAttribute('position').array, NR = geo.getAttribute('normal') ? geo.getAttribute('normal').array : null, crown = J.crown;
+    if (!idx || !NR) return null;
+    /* lõi: ăn mòn nhãn 4 lần */
+    let cur = new Int8Array(cellF), G = cellF.length;
+    for (let it = 0; it < 4; it++) { const nx = new Int8Array(G); for (let y = 1; y < Hh - 1; y++) for (let x = 1; x < W - 1; x++) { const i = y * W + x, f = cur[i]; if (f && cur[i - 1] === f && cur[i + 1] === f && cur[i - W] === f && cur[i + W] === f) nx[i] = f; } cur = nx; }
+    const has = new Set(); for (let i = 0; i < G; i++) if (cur[i]) has.add(cur[i]);
+    for (let i = 0; i < G; i++) if (!cur[i] && cellF[i] && !has.has(cellF[i])) cur[i] = cellF[i]; /* răng nhỏ: giữ nguyên nhãn */
+    /* kề cận */
+    const deg = new Int32Array(N + 1); for (let t = 0; t < idx.length; t += 3) { deg[idx[t]] += 2; deg[idx[t + 1]] += 2; deg[idx[t + 2]] += 2; }
+    const st = new Int32Array(N + 1); for (let i = 0; i < N; i++) st[i + 1] = st[i] + deg[i]; const fill = st.slice(0, N), adj = new Int32Array(st[N]);
+    for (let t = 0; t < idx.length; t += 3) { const a = idx[t], b = idx[t + 1], c = idx[t + 2]; adj[fill[a]++] = b; adj[fill[a]++] = c; adj[fill[b]++] = a; adj[fill[b]++] = c; adj[fill[c]++] = a; adj[fill[c]++] = b; }
+    const dist = new Float64Array(N).fill(1e18), lab = new Int8Array(N), heap = []; /* [d, v] */
+    const push = (d, v) => { heap.push([d, v]); let i = heap.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; } };
+    const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; i = m; } } return top; };
+    for (let i = 0; i < N; i++) { if (!crown[i]) continue; const c = cell[i]; if (c >= 0 && cur[c]) { dist[i] = 0; lab[i] = cur[c]; push(0, i); } }
+    while (heap.length) {
+      const [d, v] = pop(); if (d > dist[v]) continue;
+      for (let k = st[v]; k < st[v + 1]; k++) { const u = adj[k]; if (!crown[u]) continue; const dx = P[u * 3] - P[v * 3], dy = P[u * 3 + 1] - P[v * 3 + 1], dz = P[u * 3 + 2] - P[v * 3 + 2], len = Math.sqrt(dx * dx + dy * dy + dz * dz), dot = NR[u * 3] * NR[v * 3] + NR[u * 3 + 1] * NR[v * 3 + 1] + NR[u * 3 + 2] * NR[v * 3 + 2], nd = d + len * (1 + 14 * Math.max(0, 1 - dot)); if (nd < dist[u]) { dist[u] = nd; lab[u] = lab[v]; push(nd, u); } }
+    }
+    return lab;
+  }
   window.detectTeeth = function (J, jaw, THREE) {
     const N = J.crown.length, P = J.geo.getAttribute('position').array, U = J.U, V = J.V, H = J.H, crown = J.crown, sg = J.occ.dot(J.n) >= 0 ? 1 : -1;
     let u0 = 1e9, u1 = -1e9, v0 = 1e9, v1 = -1e9, nc = 0; for (let i = 0; i < N; i++) if (crown[i]) { nc++; if (U[i] < u0) u0 = U[i]; if (U[i] > u1) u1 = U[i]; if (V[i] < v0) v0 = V[i]; if (V[i] > v1) v1 = V[i]; }
@@ -131,6 +154,8 @@
       const L = Math.hypot(tu, tv) || 1, dx = tu / L, dy = tv / L, ps = []; for (let i = 0; i < G; i++) if (bs.lab[i] === o.id) ps.push([i, (i % W) * dx + ((i / W) | 0) * dy]); ps.sort((p, q) => p[1] - q[1]);
       const cut = Math.floor(ps.length * 0.5); ps.forEach((p, k) => (cellF[p[0]] = k < cut ? a[0].f : a[1].f));
     });
+    /* phân vùng lưới 3D: lan từ lõi từng răng, vượt nếp gấp (khe kẽ răng) thì tốn thêm chi phí => ranh giới bám khe giữa các răng */
+    const vlab = meshSegment(J, cell, cellF, W, Hh);
     /* mở rộng nhãn ra toàn bộ thân răng (các ô có điểm) bằng lan tỏa nhiều nguồn */
     const lab = new Int8Array(cellF), q = []; for (let i = 0; i < G; i++) if (lab[i]) q.push(i);
     const dist = new Uint8Array(G); for (let h = 0; h < q.length; h++) { const i = q[h], x = i % W, y = (i / W) | 0, d = dist[i]; if (d >= 14) continue; const nb = [x > 0 ? i - 1 : -1, x < W - 1 ? i + 1 : -1, y > 0 ? i - W : -1, y < Hh - 1 ? i + W : -1]; for (const j of nb) { if (j < 0 || lab[j] || !cnt[j]) continue; lab[j] = lab[i]; dist[j] = d + 1; q.push(j); } }
@@ -147,6 +172,6 @@
     const rsign = ((-fv * ru + fu * rv) > 0) ? 1 : -1; // chiều tăng của góc là bên phải?
     let pmin = 1e9, pmax = -1e9; const ph = new Float32Array(N); for (let i = 0; i < N; i++) { if (!crown[i]) continue; const d = rel(Math.atan2(V[i] - cv, U[i] - cu)); ph[i] = d; if (d < pmin) pmin = d; if (d > pmax) pmax = d; }
     for (let i = 0; i < N; i++) { let t = (ph[i] - pmin) / Math.max(1e-3, pmax - pmin); t = Math.max(0, Math.min(1, t)); tsw[i] = rsign > 0 ? 1 - t : t; }
-    return { seeds, missing, info, sweep: tsw, quality: { cost: bestR.tot / 16, present: seeds.length, total: 16 }, flipped: false, scale: bestR.kap, grid: { u0, v0, R, W, H: Hh, lab }, nblobs: blobs.length, dbg: { chain: chain.map((o) => ({ cu: o.cu, cv: o.cv, area: o.area })), mid, aIsRight, res: [bestR.a.out.map((o) => [o.slots, +o.blob.area.toFixed(0)]), bestR.b.out.map((o) => [o.slots, +o.blob.area.toFixed(0)])] } };
+    return { seeds, missing, info, sweep: tsw, quality: { cost: bestR.tot / 16, present: seeds.length, total: 16 }, flipped: false, scale: bestR.kap, grid: { u0, v0, R, W, H: Hh, lab }, vlab, nblobs: blobs.length, dbg: { chain: chain.map((o) => ({ cu: o.cu, cv: o.cv, area: o.area })), mid, aIsRight, res: [bestR.a.out.map((o) => [o.slots, +o.blob.area.toFixed(0)]), bestR.b.out.map((o) => [o.slots, +o.blob.area.toFixed(0)])] } };
   };
 })();

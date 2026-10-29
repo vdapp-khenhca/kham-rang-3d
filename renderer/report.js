@@ -36,6 +36,8 @@
       (r.done.length ? r.done.map((d) => esc(d.name) + '<div class="sub">' + fmt(d.date) + (d.who ? ' · ' + esc(d.who) : '') + '</div>').join('') : '<span class="dim">—</span>') + '</td><td>' +
       (r.todo.length ? r.todo.map((d) => esc(d.name) + (d.note ? '<div class="sub">' + esc(d.note) + '</div>' : '')).join('') : '<span class="dim">—</span>') + '</td></tr>').join('');
     const li = (arr) => arr.length ? '<ul>' + arr.map((x) => '<li>' + esc(x) + '</li>').join('') + '</ul>' : '<p class="dim">Không có nội dung.</p>';
+    const PG = { now: 'Cần làm ngay', soon: 'Nên làm trong 1–3 tháng', later: 'Có thể cân nhắc sau' };
+    const plan = (c.plan || []).length ? ['now', 'soon', 'later'].map((g) => { const L = c.plan.filter((x) => x.group === g); return L.length ? '<h3 style="margin:8pt 0 3pt;font-size:10pt">' + PG[g] + '</h3><table class="grid"><thead><tr><th style="width:8%">Răng</th><th style="width:18%">Việc cần làm</th><th style="width:20%">Căn cứ</th><th style="width:18%">Kết quả mong đợi</th><th style="width:20%">Nguy cơ nếu không làm</th><th style="width:16%">Thời gian dự kiến</th></tr></thead><tbody>' + L.map((x) => '<tr><td class="num">' + esc(x.teeth || '') + '</td><td>' + esc(x.title) + '</td><td>' + esc(x.why) + '</td><td>' + esc(x.outcome) + '</td><td>' + esc(x.risk) + '</td><td>' + esc([x.when, x.visits].filter(Boolean).join('. ')) + '</td></tr>').join('') + '</tbody></table>' : ''; }).join('') : '';
     const care = c.care.length ? '<table class="grid"><thead><tr><th style="width:24%">Dự kiến</th><th>Nội dung</th></tr></thead><tbody>' + c.care.map((t) => '<tr><td>' + fmt(t.due) + '</td><td>' + esc(t.title) + '</td></tr>').join('') + '</tbody></table>' : '';
     const shot = (src, cap) => src ? '<figure><img src="' + src + '"><figcaption>' + cap + '</figcaption></figure>' : '';
     return '<!doctype html><html lang="vi"><head><meta charset="utf-8"><title>Phiếu khám ' + esc(p.name) + '</title><style>/*FONTS*/' + `
@@ -87,9 +89,10 @@ figure{margin:0;break-inside:avoid} figure img{width:100%;display:block;border:.
 
       '<h2><span>V.</span>Chi tiết từng răng</h2>' + (rows ? '<table class="grid"><thead><tr><th>Răng</th><th style="width:34%">Nhận xét</th><th style="width:26%">Đã thực hiện</th><th style="width:26%">Cần thực hiện hoặc theo dõi</th></tr></thead><tbody>' + rows + '</tbody></table>' : '<p class="dim">Chưa có ghi nhận theo từng răng.</p>') +
 
-      '<h2><span>VI.</span>Lời khuyên</h2><div class="avoid">' + li(c.advice) + '</div>' +
-      '<h2><span>VII.</span>Những điều cần lưu ý trong tương lai</h2><div class="avoid">' + li(c.risks) + '</div>' +
-      (care ? '<h2><span>VIII.</span>Lịch tái khám và chăm sóc dự kiến</h2><div class="avoid">' + care + '</div>' : '') +
+      (plan ? '<h2><span>VI.</span>Kế hoạch điều trị đề xuất</h2>' + plan : '') +
+      '<h2><span>VII.</span>Lời khuyên</h2><div class="avoid">' + li(c.advice) + '</div>' +
+      '<h2><span>VIII.</span>Những điều cần lưu ý trong tương lai</h2><div class="avoid">' + li(c.risks) + '</div>' +
+      (care ? '<h2><span>IX.</span>Lịch tái khám và chăm sóc dự kiến</h2><div class="avoid">' + care + '</div>' : '') +
       '<div class="sign"><div>Ngày ' + fmt(p.visitDate) + '<br><b>Bác sĩ khám</b><div class="line"></div>' + esc(p.doctor || cl.doctor || '') + (cl.license ? '<br><span class="dim">CCHN: ' + esc(cl.license) + '</span>' : '') + '</div></div>' +
       '<div class="note">' + esc(cl.note || 'Phiếu này tổng hợp kết quả khám và hình ảnh scan tại thời điểm lập, không thay thế chỉ định điều trị của bác sĩ. Nếu có thắc mắc hoặc thấy răng miệng có thay đổi, xin liên hệ phòng khám để được hỗ trợ.') + '</div>' +
       '</body></html>';
