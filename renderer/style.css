@@ -117,3 +117,6 @@ img.pano{cursor:zoom-in}
 .cvp canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 .cvp>i{position:absolute;right:8px;top:6px;font-style:normal;font-size:11px;color:#9fb3ba;pointer-events:none;text-shadow:0 0 3px #000}
 .cv.ruling .cvp canvas{cursor:crosshair}
+details.card>summary{cursor:pointer;padding:2px 0}
+details.card[open]>summary{margin-bottom:8px}
+dialog::backdrop{background:rgba(0,0,0,.35)}

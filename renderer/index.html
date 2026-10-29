@@ -19,8 +19,8 @@
 <section id="vHome" class="page">
   <div class="home">
     <div class="homehead">
-      <div><h1>Khách hàng</h1><p class="muted">Kéo file scan (zip, ply, stl) vào đây hoặc bấm "Mở scan khách mới". Máy tự nhận diện răng và AI quét ngay. Có thể kèm ảnh X-quang (JPG, PNG).</p></div>
-      <div class="row"><input type="text" id="q" placeholder="Tìm theo tên" aria-label="Tìm khách"><button class="btn" type="button" id="newCase">Mở scan khách mới</button></div>
+      <div><h1>Khách hàng</h1><p class="muted">Bấm "Tạo hồ sơ khách", nhập thông tin, rồi tải scan 3D, CT hoặc X-quang lên và bấm "Phân tích kết hợp".</p></div>
+      <div class="row"><input type="text" id="q" placeholder="Tìm theo tên" aria-label="Tìm khách"><button class="btn" type="button" id="newCase">Tạo hồ sơ khách</button></div>
     </div>
     <div class="homegrid">
       <div class="tw"><table id="caseTbl"></table></div>
@@ -53,7 +53,7 @@
     </main>
     <aside class="side">
       <div class="sh"><h2 id="caseT"></h2><p id="caseS"></p></div>
-      <div class="tabs" role="tablist"><button type="button" role="tab" data-tab="scan" aria-selected="true">Quét AI</button><button type="button" role="tab" data-tab="exam" aria-selected="false">Thăm khám của bác sĩ</button><button type="button" role="tab" data-tab="doc" aria-selected="false">PDF</button><button type="button" role="tab" data-tab="care" aria-selected="false">Chăm sóc</button><button type="button" role="tab" data-tab="todo" aria-selected="false">Chưa làm</button></div>
+      <div class="tabs" role="tablist"><button type="button" role="tab" data-tab="scan" aria-selected="true">AI phân tích</button><button type="button" role="tab" data-tab="exam" aria-selected="false">Bác sĩ hội chẩn</button><button type="button" role="tab" data-tab="doc" aria-selected="false">PDF</button><button type="button" role="tab" data-tab="care" aria-selected="false">Chăm sóc</button></div>
       <div class="sb" id="sb"></div>
     </aside>
   </div>
@@ -62,6 +62,7 @@
 <section id="vSettings" class="page" hidden><div class="settings" id="setBody"></div></section>
 <div class="toast" id="toast" hidden></div>
 
+<dialog id="newDlg" style="border:1px solid #ccc;border-radius:10px;padding:18px;min-width:340px"><h3 style="margin:0 0 10px">Hồ sơ khách mới</h3><div class="form"><label class="f">Họ và tên<input type="text" id="nName"></label><div class="f3"><label class="f">Năm sinh<input type="text" id="nYear"></label><label class="f">Giới tính<select id="nGender"><option></option><option>Nam</option><option>Nữ</option></select></label><label class="f">Điện thoại<input type="text" id="nPhone"></label></div><label class="f">Tiền sử, lưu ý (dị ứng, bệnh nền, thuốc đang dùng)<textarea id="nHist"></textarea></label><div class="row sp"><button class="btn ghost" type="button" id="nCancel">Hủy</button><button class="btn" type="button" id="nOk">Tạo hồ sơ</button></div></div></dialog>
 <script src="vendor/three.min.js"></script>
 <script src="vendor/PLYLoader.js"></script>
 <script src="vendor/STLLoader.js"></script>

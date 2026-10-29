@@ -275,7 +275,7 @@
     if (k === 'done') stopMark();
   });
   $('guide').addEventListener('change', (e) => { if (e.target.id === 'gsel' && S.mark) { S.mark.idx = +e.target.value; markGuide(); } });
-  $('aiAll').onclick = () => runScan({});
+  $('aiAll').onclick = () => runCombined();
   $('markU').onclick = () => startMark('upper'); $('markL').onclick = () => startMark('lower');
 
   function addLog(f, entry) { const log = (S.C.teeth[f] = (S.C.teeth[f] || []).slice()); entry.id = Date.now().toString(36) + Math.random().toString(36).slice(2, 5); log.push(entry); persist(); repaintAll(); render(); }
@@ -444,11 +444,11 @@
       while (fresh.length && !sc.cancel && S.C) {
         sc.phase = 'confirm'; sc.jaw = fresh[0]; sc.confirmed = false; sc.redo = ''; sc.manual = ''; viewJawOnly(sc.jaw); repaintAll(); renderHud();
         await new Promise((r) => { sc.resolve = r; }); sc.resolve = null; if (sc.cancel) break;
-        if (sc.manual) { const jn = sc.manual; sc.busy = false; sc.phase = ''; renderHud(); showBothJaws(); startMark(jn); toast('Đánh dấu thủ công xong thì bấm Quét AI để chạy tiếp'); return; }
+        if (sc.manual) { const jn = sc.manual; sc.busy = false; sc.phase = ''; renderHud(); showBothJaws(); startMark(jn); toast('Đánh dấu thủ công xong thì bấm Phân tích kết hợp để chạy tiếp'); return; }
         if (sc.redo) { const jn = sc.redo; sc.redo = ''; sc.phase = 'detect'; await detectJaw(jn); continue; }
         if (sc.confirmed) { const cj = sc.jaw; if (S.C.detect && S.C.detect[cj]) S.C.detect[cj].confirmed = true; persist(); fresh = fresh.filter((j) => j !== cj); }
       }
-      if (!S.hasKey) { sc.warn.push('Chưa có khóa OpenAI nên AI chưa khám. Vào Cài đặt nhập khóa rồi bấm "Quét AI".'); }
+      if (!S.hasKey) { sc.warn.push('Chưa có khóa OpenAI nên AI chưa khám. Vào Cài đặt nhập khóa rồi bấm "Phân tích kết hợp".'); }
       else if (!sc.cancel && S.C) {
         const plan = {}; let total = 0;
         for (const jn of ['upper', 'lower']) { const J = S.jaws[jn]; if (!J || !J.seeds.length) { plan[jn] = []; continue; } let list = J.seeds.map((q) => q.f).filter((f) => !isMissing(f)).sort((a, b) => ordOf(a) - ordOf(b)); if (!opts.all) list = list.filter((f) => !teethLog(f).some((e) => e.kind === 'ai' && !e.src)); plan[jn] = list; total += list.length; }
@@ -576,6 +576,18 @@
     } catch (e) { S.pano.err = cleanErr(e); } finally { S.pano.busy = false; if (!quiet) render(); }
   }
   const GRP = { now: 'Cần làm ngay', soon: 'Nên làm trong 1–3 tháng', later: 'Có thể cân nhắc sau' };
+  async function runCombined() {
+    if (!S.C || S.scan.busy) return;
+    const all = !!(S.C.plan && S.C.plan.items && S.C.plan.items.length);
+    if (Object.keys(S.jaws).length) { runScan({ all }); return; }
+    if (!S.hasKey) { toast('Chưa có khóa API. Vào Cài đặt để nhập khóa OpenAI.'); return; }
+    const sc = S.scan; sc.busy = true; sc.err = ''; sc.warn = []; sc.fail = [];
+    try {
+      if (S.C.pano && S.pano.url) { sc.phase = 'pano'; render(); await runPano(true); }
+      if (S.C.ct) { sc.phase = 'ct'; render(); await runCt(true); }
+      sc.phase = 'report'; render(); await runPlan(true);
+    } catch (e) { sc.err = cleanErr(e); } finally { sc.busy = false; sc.phase = ''; render(); }
+  }
   async function runPlan(quiet) {
     if (!S.hasKey) { toast('Chưa có khóa API. Vào Cài đặt để nhập khóa OpenAI.'); return; }
     S.rep = { busy: true, err: '' }; if (!quiet) render();
@@ -599,10 +611,19 @@
   }
   const aiReport = runPlan;
   function planPanel() {
-    const it = (S.C.plan && S.C.plan.items) || [];
-    return '<div class="card"><div class="row sp"><h3>Kế hoạch điều trị (kết hợp scan + phim)</h3><button class="btn ghost sm" type="button" id="pladd">Thêm mục</button></div>' +
-      (it.length ? it.map((x, i) => '<div class="plan" style="border:1px solid var(--line,#ddd);border-radius:8px;padding:8px;margin:6px 0"><div class="row"><select data-pl="' + i + ':group">' + Object.keys(GRP).map((g) => '<option value="' + g + '"' + (g === x.group ? ' selected' : '') + '>' + GRP[g] + '</option>').join('') + '</select><input type="text" data-pl="' + i + ':title" value="' + esc(x.title) + '" placeholder="Thủ thuật" style="flex:1"><input type="text" data-pl="' + i + ':teeth" value="' + esc((x.teeth || []).join(' ')) + '" placeholder="Răng" style="width:90px"><button class="btn ghost sm" type="button" data-pld="' + i + '">Xóa</button></div>' +
-        ['why:Căn cứ', 'outcome:Kết quả mong đợi', 'risk:Nguy cơ nếu không làm', 'when:Thời gian làm tiếp', 'visits:Số hẹn / thời gian'].map((k) => { const [a, l] = k.split(':'); return '<label class="f">' + l + '<input type="text" data-pl="' + i + ':' + a + '" value="' + esc(x[a]) + '"></label>'; }).join('') + '</div>').join('') : '<p class="muted small">Chưa có kế hoạch. Bấm "AI lập kế hoạch" bên dưới (hoặc chạy Quét AI).</p>') + '</div>';
+    const it = (S.C.plan && S.C.plan.items) || [], R = S.C.report;
+    let h = '<div class="card"><div class="row sp"><h3>Phác đồ AI</h3><button class="btn ghost sm" type="button" id="pladd">Thêm mục</button></div>';
+    if (!it.length && !R.summary) return h + '<p class="muted small">Chưa có phác đồ. Tải dữ liệu rồi bấm "Phân tích kết hợp". AI sẽ gộp scan 3D với CT hoặc X-quang để đưa ra tình trạng tổng quát, việc cần làm ngay, việc làm sau, kết quả mong đợi và nguy cơ nếu không làm.</p></div>';
+    h += '<label class="f">Tình trạng tổng quát<textarea data-r="summary" style="min-height:90px">' + esc(R.summary) + '</textarea></label>';
+    Object.keys(GRP).forEach((g) => {
+      const L = it.map((x, i) => [x, i]).filter((q) => q[0].group === g); if (!L.length) return;
+      h += '<h4 style="margin:12px 0 4px">' + GRP[g] + '</h4>';
+      L.forEach(([x, i]) => {
+        h += '<div class="plan" style="border:1px solid var(--line,#ddd);border-radius:8px;padding:8px;margin:6px 0"><div class="row"><select data-pl="' + i + ':group">' + Object.keys(GRP).map((k) => '<option value="' + k + '"' + (k === x.group ? ' selected' : '') + '>' + GRP[k] + '</option>').join('') + '</select><input type="text" data-pl="' + i + ':title" value="' + esc(x.title) + '" placeholder="Thủ thuật" style="flex:1"><input type="text" data-pl="' + i + ':teeth" value="' + esc((x.teeth || []).join(' ')) + '" placeholder="Răng" style="width:90px"><button class="btn ghost sm" type="button" data-pld="' + i + '">Xóa</button></div>' +
+          ['why:Căn cứ (scan, phim)', 'outcome:Kết quả mong đợi', 'risk:Nguy cơ nếu không làm', 'when:Thời gian làm tiếp', 'visits:Số hẹn, thời gian'].map((k) => { const [a2, l] = k.split(':'); return '<label class="f">' + l + '<input type="text" data-pl="' + i + ':' + a2 + '" value="' + esc(x[a2]) + '"></label>'; }).join('') + '</div>';
+      });
+    });
+    return h + '</div>';
   }
 
   /* ================= PDF ================= */
@@ -685,16 +706,24 @@
   const allSeeds = () => { const o = []; Object.values(S.jaws).forEach((J) => J.seeds.forEach((q) => o.push(q.f))); return o.sort((a, b) => ordOf(a) - ordOf(b)); };
   function scanPanel() {
     const sc = S.scan, seeds = allSeeds(), nAi = seeds.filter((f) => teethLog(f).some((e) => e.kind === 'ai' && !e.src)).length, det = S.C.detect || {};
-    let h = '<div class="card ai"><div class="row sp"><h3>Quét AI</h3><button class="btn sm" type="button" id="scanall"' + (sc.busy ? ' disabled' : '') + '>' + (sc.busy ? 'Đang quét…' : seeds.length ? (nAi >= seeds.length ? 'Quét lại toàn bộ' : 'Quét AI') : 'Nhận diện và quét') + '</button></div>';
-    h += '<p class="small">' + (seeds.length ? 'Đã nhận diện <b>' + seeds.length + '</b> răng, AI đã khám <b>' + nAi + '/' + seeds.length + '</b> răng.' : 'Chưa nhận diện răng nào trên mô hình.') + '</p>';
-    if (!S.hasKey) h += '<div class="callout">Chưa có khóa OpenAI. Vào <b>Cài đặt</b> nhập khóa để AI phân tích từng răng.</div>';
+    const hasU = !!S.jaws.upper, hasL = !!S.jaws.lower, ct0 = S.C.ct, anyData = hasU || hasL || !!S.pano.url || !!ct0, planned = !!(S.C.plan && S.C.plan.items && S.C.plan.items.length);
+    const inrow = (t, st, btn) => '<div class="row sp" style="padding:7px 0;border-bottom:1px solid var(--line,#e3e3e3)"><div><b>' + t + '</b><div class="small muted">' + st + '</div></div>' + btn + '</div>';
+    const PH = { detect: 'Nhận diện răng', confirm: 'Chờ bác sĩ xác nhận số răng', pano: 'Đọc X-quang', ct: 'Đọc CT', ai: 'Khám từng răng (' + sc.done + '/' + sc.total + ')', report: 'Lập phác đồ' };
+    let h = '<div class="card ai"><h3>Dữ liệu đầu vào</h3>' +
+      inrow('Scan 3D trong miệng', hasU || hasL ? 'Hàm trên ' + (hasU ? '✓' : '—') + ' · Hàm dưới ' + (hasL ? '✓' : '—') + (seeds.length ? ' · ' + seeds.length + ' răng' : '') : 'Chưa có (file .ply, .stl hoặc zip)', '<label class="btn ghost sm" style="cursor:pointer">' + (hasU || hasL ? 'Đổi scan' : 'Tải scan 3D') + '<input type="file" id="scanFile" accept=".ply,.stl,.zip" multiple hidden></label>') +
+      inrow('X-quang toàn cảnh', S.pano.url ? 'Đã có' : 'Chưa có (DICOM, JPG, PNG)', '<label class="btn ghost sm" style="cursor:pointer">' + (S.pano.url ? 'Đổi phim' : 'Tải phim') + '<input type="file" id="panoFile" accept="image/png,image/jpeg,image/webp,.dcm,.dicom" hidden></label>') +
+      inrow('CT 3D (CBCT)', ct0 ? ct0.n + ' lát · ' + ct0.vx + ' mm' : 'Chưa có (zip hoặc nhiều file .dcm)', '<label class="btn ghost sm" style="cursor:pointer">' + (ct0 ? 'Đổi CT' : 'Tải CT') + '<input type="file" id="ctFile" accept=".dcm,.dicom,.zip" multiple hidden></label>') +
+      '<div class="row" style="margin-top:10px"><button class="btn" type="button" id="scanall"' + (sc.busy || !anyData ? ' disabled' : '') + ' style="padding:9px 22px">' + (sc.busy ? 'Đang phân tích…' : planned ? 'Phân tích lại' : 'Phân tích kết hợp') + '</button>' + (sc.busy ? '<span class="small">' + esc(PH[sc.phase] || '') + '</span>' : '') + '</div>';
+    if (!S.hasKey) h += '<div class="callout">Chưa có khóa OpenAI. Vào <b>Cài đặt</b> nhập khóa để AI phân tích.</div>';
     sc.warn.forEach((w) => { h += '<div class="callout">' + esc(w) + '</div>'; });
     if (sc.err && !sc.busy) h += '<p class="err">' + esc(sc.err) + '</p>';
-    h += '</div>';
-    h += '<div class="card"><h3>Kiểm tra số răng</h3><p class="small muted">Máy tự đoán vị trí và số thứ tự răng từ scan, nên bác sĩ hãy nhìn lướt các số trên mô hình. Nếu thấy nhầm, sửa ngay tại đây:</p><div class="row">';
+    if (S.rep.err) h += '<p class="err">' + esc(S.rep.err) + '</p>';
+    h += '</div>' + planPanel();
+    h += '<details class="card"><summary><b>Kiểm tra số răng</b></summary><p class="small muted">Máy tự đoán vị trí và số thứ tự răng từ scan, nên bác sĩ hãy nhìn lướt các số trên mô hình. Nếu thấy nhầm, sửa ngay tại đây:</p><div class="row">';
     ['upper', 'lower'].forEach((jn) => { if (!S.jaws[jn]) return; h += '<button class="btn ghost sm" type="button" data-act="redetect" data-jaw="' + jn + '"' + (sc.busy ? ' disabled' : '') + '>Nhận diện lại ' + jawName(jn) + '</button><button class="btn ghost sm" type="button" data-act="flip" data-jaw="' + jn + '"' + (sc.busy ? ' disabled' : '') + '>Đảo trái/phải ' + jawName(jn) + '</button>'; });
-    h += '</div><p class="small muted">Một răng sai vị trí: vào tab "Thăm khám của bác sĩ", chọn răng đó rồi bấm "Chỉnh lại vị trí". Muốn tự bấm cả hàm: nút "Đánh dấu thủ công" phía trên mô hình.' + (det.upper || det.lower ? '' : '') + '</p></div>';
-    h += '<div class="card"><div class="row sp"><h3>X-quang / Panorama</h3><label class="btn ghost sm" style="cursor:pointer">' + (S.pano.url ? 'Đổi phim' : 'Thêm phim') + '<input type="file" id="panoFile" accept="image/png,image/jpeg,image/webp,.dcm,.dicom" hidden></label></div>';
+    h += '</div><p class="small muted">Một răng sai vị trí: vào tab "Thăm khám của bác sĩ", chọn răng đó rồi bấm "Chỉnh lại vị trí". Muốn tự bấm cả hàm: nút "Đánh dấu thủ công" phía trên mô hình.' + (det.upper || det.lower ? '' : '') + '</p></details>';
+    if (S.pano.url || ct0) h += '<details class="card"><summary><b>Chi tiết đọc phim X-quang và CT</b></summary>';
+    if (S.pano.url) h += '<h3>X-quang / Panorama</h3>';
     if (S.pano.url) {
       const pm = S.C.pano && S.C.pano.meta;
       h += '<img class="pano" id="panoImg" src="' + S.pano.url + '" alt="Phim X-quang của khách" title="Bấm để phóng to">' + (pm && (pm.maker || pm.age) ? '<p class="muted small">' + esc([pm.maker, pm.model, pm.modality, pm.age ? 'tuổi ' + String(pm.age).replace(/^0+/, '').replace('Y', '') : '', pm.study ? fmt(pm.study.slice(0, 4) + '-' + pm.study.slice(4, 6) + '-' + pm.study.slice(6, 8)) : ''].filter(Boolean).join(' · ')) + '</p>' : '') +
@@ -702,21 +731,19 @@
       if (S.pano.err) h += '<p class="err">' + esc(S.pano.err) + '</p>';
       const r = S.C.pano && S.C.pano.result;
       if (r) h += (r.quality ? '<p class="muted small">Chất lượng phim: ' + esc(r.quality) + '</p>' : '') + '<p>' + esc(r.summary) + '</p>' + ((r.sections || []).length ? '<div class="secl">' + r.sections.map((x) => '<div><b>' + esc(x.k) + '.</b> ' + esc(x.v) + '</div>').join('') + '</div>' : '') + (r.general.length ? '<ul class="l small">' + r.general.map((x) => '<li>' + esc(x) + '</li>').join('') + '</ul>' : '') + (r.review.length ? '<div class="callout">Cần bác sĩ xác nhận:<ul class="l small">' + r.review.map((x) => '<li>' + esc(x) + '</li>').join('') + '</ul></div>' : '') + '<p class="muted small">' + r.count + ' răng có ghi nhận từ X-quang (xem trong hồ sơ từng răng). ' + fmt(r.date) + '</p>';
-    } else h += '<p class="small muted">Thêm phim X-quang toàn cảnh: đọc được trực tiếp file DICOM (.dcm) từ máy chụp, hoặc ảnh JPG, PNG. Có thể thả cả file zip chứa .dcm vào cửa sổ.</p>';
-    h += '</div>';
+    }
     { const c = S.C.ct, r = c && c.result;
-      h += '<div class="card"><div class="row sp"><h3>CT 3D (CBCT)</h3><label class="btn ghost sm" style="cursor:pointer">' + (c ? 'Đổi CT' : 'Thêm CT') + '<input type="file" id="ctFile" accept=".dcm,.dicom,.zip" multiple hidden></label></div>';
+      if (c) h += '<h3>CT 3D (CBCT)</h3>';
       if (c) h += '<p class="muted small">' + [c.meta && c.meta.maker, c.meta && c.meta.model, c.n + ' lát', c.w + '×' + c.h, c.vx + ' mm', fmt(c.date)].filter(Boolean).map(esc).join(' · ') + '</p><div class="row"><button class="btn ghost sm" type="button" id="ctOpen">Mở trình xem CT</button><button class="btn sm" type="button" id="ctRun"' + (S.ctBusy ? ' disabled' : '') + '>' + (S.ctBusy ? 'Đang đọc CT…' : r ? 'Đọc lại CT' : 'AI đọc CT') + '</button></div>';
-      else h += '<p class="small muted">Thả thư mục hoặc file zip CT (nhiều lát .dcm) vào cửa sổ. App dựng 3 mặt cắt, ảnh toàn cảnh, mặt cắt từng răng và đo mm thật.</p>';
       if (S.ctErr) h += '<p class="err">' + esc(S.ctErr) + '</p>';
       if (r) h += (r.quality ? '<p class="muted small">Chất lượng: ' + esc(r.quality) + '</p>' : '') + '<p>' + esc(r.summary) + '</p>' + ((r.sections || []).length ? '<div class="secl">' + r.sections.map((x) => '<div><b>' + esc(x.k) + '.</b> ' + esc(x.v) + '</div>').join('') + '</div>' : '') + (r.general.length ? '<ul class="l small">' + r.general.map((x) => '<li>' + esc(x) + '</li>').join('') + '</ul>' : '') + (r.review.length ? '<div class="callout">Cần bác sĩ xác nhận:<ul class="l small">' + r.review.map((x) => '<li>' + esc(x) + '</li>').join('') + '</ul></div>' : '') + '<p class="muted small">' + r.count + ' răng có ghi nhận từ CT. ' + fmt(r.date) + '</p>';
-      h += '</div>'; }
+      if (S.pano.url || c) h += '</details>'; }
     if (seeds.length) {
-      h += '<div><div class="lbl">Kết quả từng răng</div><div class="slist">' + seeds.map((f) => {
+      h += '<details class="card"><summary><b>Kết quả từng răng</b></summary><div class="slist">' + seeds.map((f) => {
         const st = stateOf(f), la = aiLatest(f), a = la.length ? la[0].ai : null, running = FX.rings.has(f);
         const sv = a ? (a.services || []).slice(0, 3).map((x) => '<span class="b ' + (x.priority === 'cao' ? 'risk' : x.priority === 'thấp' ? 'none' : 'pend') + '">' + esc(x.name) + '</span>').join('') : '';
         return '<button type="button" class="srow' + (S.sel === f ? ' on' : '') + '" data-f="' + f + '"><span class="tn ' + st + '">' + f + '</span><span class="sb2"><span class="small">' + (running ? 'Đang quét…' : a ? esc(a.impression || 'Đã quét') : '<i class="muted">Chưa quét</i>') + '</span>' + (sv ? '<span class="row">' + sv + '</span>' : '') + '</span></button>';
-      }).join('') + '</div></div>';
+      }).join('') + '</div></details>';
     }
     return h;
   }
@@ -758,7 +785,7 @@
       '<div class="f3"><label class="f">Năm sinh<input type="text" data-p="year" value="' + esc(P.year) + '"></label><label class="f">Giới tính<select data-p="gender">' + ['', 'Nam', 'Nữ'].map((g) => '<option' + (g === P.gender ? ' selected' : '') + '>' + g + '</option>').join('') + '</select></label><label class="f">Điện thoại<input type="text" data-p="phone" value="' + esc(P.phone) + '"></label></div>' +
       '<div class="f2"><label class="f">Bác sĩ khám<input type="text" data-p="doctor" value="' + esc(P.doctor) + '" placeholder="' + esc(S.cfg.clinic.doctor) + '"></label><label class="f">Ngày khám<input type="date" data-p="visitDate" value="' + esc(P.visitDate) + '"></label></div>' +
       '<label class="f">Tiền sử, lưu ý (dị ứng, bệnh nền, thuốc đang dùng)<textarea data-p="history">' + esc(P.history) + '</textarea></label></div></div>' +
-      planPanel() + '<div class="card"><div class="row sp"><h3>Nội dung phiếu gửi khách</h3><button class="btn sm" type="button" id="airep"' + (S.rep.busy ? ' disabled' : '') + '>' + (S.rep.busy ? 'Đang soạn…' : 'AI lập kế hoạch + soạn phiếu') + '</button></div>' +
+      '<div class="card"><div class="row sp"><h3>Nội dung phiếu gửi khách</h3><button class="btn sm" type="button" id="airep"' + (S.rep.busy ? ' disabled' : '') + '>' + (S.rep.busy ? 'Đang soạn…' : 'AI soạn lại phác đồ') + '</button></div>' +
       (S.rep.err ? '<p class="err">' + esc(S.rep.err) + '</p>' : '') +
       '<label class="f">Nhận định tổng quan<textarea data-r="summary" style="min-height:110px">' + esc(R.summary) + '</textarea></label>' +
       '<label class="f">Lời khuyên (mỗi dòng một ý)<textarea data-r="advice" style="min-height:100px">' + esc(R.advice) + '</textarea></label>' +
@@ -778,7 +805,7 @@
     const has = Object.keys(S.jaws).length > 0, seeds = Object.values(S.jaws).reduce((a, J) => a + J.seeds.length, 0);
     $('caseT').textContent = S.C.patient.name || S.C.key; $('caseS').textContent = 'Mã hồ sơ ' + S.C.code + ' · tự lưu trên máy này';
     $('tU').hidden = !S.jaws.upper; $('tL').hidden = !S.jaws.lower; $('markU').hidden = !S.jaws.upper || !!S.mark; $('markL').hidden = !S.jaws.lower || !!S.mark;
-    const aa = $('aiAll'); aa.hidden = false; aa.disabled = S.scan.busy; aa.textContent = S.scan.busy ? 'Đang quét…' : 'Quét AI';
+    const aa = $('aiAll'); aa.hidden = false; aa.disabled = S.scan.busy; aa.textContent = S.scan.busy ? 'Đang phân tích…' : 'Phân tích';
     $('stat').innerHTML = '<b>' + seeds + '</b> răng đã đánh dấu';
     const sb = $('sb'), top = sb.scrollTop; let h = '';
     if (S.tab === 'doc') h = docPanel();
@@ -855,7 +882,7 @@
     }
     const sh = t.closest('[data-svc-h]');
     if (sh) { const row = sh.closest('[data-svc]'), key = row.dataset.mode + '|' + norm(row.dataset.svc), opening = S.care.open !== key; S.care.open = opening ? key : null; if (opening) setPin(row.dataset.svc, row.dataset.mode); else { S.care.pin = null; FX.pin = new Set(); } render(); return; }
-    if (t.id === 'scanall') runScan({ all: false });
+    if (t.id === 'scanall') runCombined();
     if (t.id === 'runpano') runPano(false);
     if (t.id === 'panoZoom' || t.id === 'panoImg') openXray();
     if (t.id === 'ctOpen') openCt();
@@ -886,6 +913,7 @@
     if (e.target.dataset.p === 'gender') { S.C.patient.gender = e.target.value; persist(); }
     if (id === 'miss') { const f = S.sel; S.C.marks.missing = S.C.marks.missing.filter((x) => x !== f); if (e.target.checked) { S.C.marks.missing.push(f); const J = S.jaws[jawOf(f)]; if (J) { J.seeds = J.seeds.filter((q) => q.f !== f); recompute(J); saveMarks(); } } persist(); repaintAll(); render(); }
     if (e.target.dataset.ck) { const v = e.target.dataset.ck, i = v.lastIndexOf('|'); toggleDone(v.slice(0, i), +v.slice(i + 1), e.target.checked); }
+    if (id === 'scanFile' && e.target.files.length) { importFiles(Array.from(e.target.files)); e.target.value = ''; return; }
     if (id === 'ctFile' && e.target.files.length) { importFiles(Array.from(e.target.files)); e.target.value = ''; return; }
     if (id === 'panoFile' && e.target.files[0]) { const fl = e.target.files[0]; attachPano(fl).then(() => { render(); toast('Đã thêm ảnh X-quang'); }).catch((er) => toast('Không đọc được ảnh: ' + cleanErr(er))); }
     if (e.target.dataset.td) { const t = S.C.care.find((x) => x.id === e.target.dataset.td); if (t) { t.done = e.target.checked; persist(); render(); } }
@@ -935,11 +963,15 @@
     try {
       const entries = await readEntries(rest), pick = {};
       for (const e of entries) {
-        const base = e.name.split(/[\\/]/).pop().replace(/\.(ply|stl)$/i, ''), m = base.match(/^(.*?)-?(upperjaw|lowerjaw)$/i); if (!m) continue;
-        const jn = m[2].toLowerCase() === 'upperjaw' ? 'upper' : 'lower';
+        const base = e.name.split(/[\\/]/).pop().replace(/\.(ply|stl)$/i, ''), m = base.match(/^(.*?)-?(upperjaw|lowerjaw)$/i) || base.match(/^(.*?)[-_ ]?(upper|lower)/i) || base.match(/^()(trên|dưới)/i); if (!m) continue;
+        const jn = /^(upper|trên)/i.test(m[2]) ? 'upper' : 'lower';
         if (!pick[jn] || (/\.ply$/i.test(e.name) && !/\.ply$/i.test(pick[jn].name))) pick[jn] = Object.assign({ patient: m[1] }, e);
       }
       if (!pick.upper && !pick.lower) { toast('Không thấy file upperjaw hoặc lowerjaw (.ply, .stl)'); return; }
+      if (S.view === 'case' && S.C) {
+        const key0 = S.C.key; for (const jn of Object.keys(pick)) { await window.api.cases.saveScan(key0, jn, /\.stl$/i.test(pick[jn].name) ? 'stl' : 'ply', pick[jn].buf); S.C.marks[jn] = []; if (S.C.detect) delete S.C.detect[jn]; }
+        await window.api.cases.save(key0, S.C); await openCase(key0); toast('Đã nạp scan. Bấm "Phân tích kết hợp".'); return;
+      }
       const pat = (pick.upper || pick.lower).patient.replace(/^Ca\s+c(ủa|#U1ee7a)\s*/i, '').replace(/[-_ ]+$/, ''), key = slugOf(pat);
       const ex = await window.api.cases.load(key);
       S.C = ex ? ex.data : newCase(key, pat); S.C.marks = S.C.marks || { upper: [], lower: [], missing: [] }; S.C.teeth = S.C.teeth || {}; S.C.care = S.C.care || []; S.C.report = S.C.report || { summary: '', advice: '', risks: '' };
@@ -951,7 +983,6 @@
       fresh = !((S.C.marks.upper || []).length || (S.C.marks.lower || []).length);
       enterCase();
     } catch (err) { console.error(err); toast('Không đọc được file: ' + cleanErr(err)); } finally { $('busy').hidden = true; }
-    if (fresh && S.C) runScan({});
   }
   function newCase(key, name) {
     const d = new Date();
@@ -988,7 +1019,14 @@
     if (rm) { if (rm.dataset.sure !== '1') { rm.dataset.sure = '1'; rm.textContent = 'Bấm lần nữa để xóa'; setTimeout(() => { rm.dataset.sure = ''; rm.textContent = 'Xóa'; }, 3000); return; } await window.api.cases.remove(rm.dataset.rm); loadHome(); return; }
     const tr = e.target.closest('[data-open]'); if (tr) openCase(tr.dataset.open);
   });
-  $('newCase').onclick = async () => { const files = await window.api.pickFiles(); if (files.length) importFiles(files); };
+  $('newCase').onclick = () => { ['nName', 'nYear', 'nPhone', 'nHist'].forEach((id) => { $(id).value = ''; }); $('nGender').value = ''; $('newDlg').showModal(); $('nName').focus(); };
+  $('nCancel').onclick = () => $('newDlg').close();
+  $('nOk').onclick = async () => {
+    const name = $('nName').value.trim(); if (!name) { toast('Nhập họ tên khách'); return; }
+    let key = slugOf(name); if (await window.api.cases.load(key)) key += '-' + Date.now().toString(36).slice(-4);
+    S.C = newCase(key, name); Object.assign(S.C.patient, { year: $('nYear').value.trim(), gender: $('nGender').value, phone: $('nPhone').value.trim(), history: $('nHist').value.trim() });
+    await window.api.cases.save(key, S.C); clearJaws(); S.pano = { url: '', busy: false, err: '' }; $('newDlg').close(); enterCase(); toast('Đã tạo hồ sơ. Tải scan, CT hoặc X-quang lên rồi bấm Phân tích.');
+  };
   $('back').onclick = async () => { S.scan.cancel = true; fxClear(); await flush(); S.C = null; clearJaws(); show('home'); };
   window.addEventListener('dragover', (e) => e.preventDefault());
   window.addEventListener('drop', (e) => { e.preventDefault(); if (e.dataTransfer && e.dataTransfer.files.length && S.view !== 'settings') importFiles([...e.dataTransfer.files]); });
