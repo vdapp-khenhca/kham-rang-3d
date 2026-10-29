@@ -343,11 +343,44 @@
     const g = []; if (S.C.pano && S.C.pano.result && S.C.pano.result.summary) g.push('tổng quan X-quang: ' + S.C.pano.result.summary); if (S.C.ct && S.C.ct.result && S.C.ct.result.summary) g.push('tổng quan CT: ' + S.C.ct.result.summary);
     return parts.concat(g.slice(0, 2)).filter(Boolean).join(' | ');
   }
+  /* ---- ghép scan với CT: vị trí răng trên scan -> vị trí trên ảnh toàn cảnh CT ---- */
+  const TW = { upper: [8.5, 6.5, 7.5, 7, 6.5, 10, 9.5, 9], lower: [5.5, 6, 7, 7, 7, 11, 10.5, 10] };
+  function signedArch(jn) {
+    const J = S.jaws[jn]; if (!J || J.seeds.length < 6) return null;
+    const flat = (p) => p.clone().addScaledVector(J.occ, -p.dot(J.occ)), pos = {}; J.seeds.forEach((q) => { pos[q.f] = flat(q.p); });
+    const rt = jn === 'upper' ? 1 : 4, lt = jn === 'upper' ? 2 : 3, R = SEQ[jn].filter((f) => Math.floor(f / 10) === rt && pos[f]).reverse(), L = SEQ[jn].filter((f) => Math.floor(f / 10) === lt && pos[f]);
+    if (!R.length || !L.length) return null;
+    const mid = pos[R[0]].clone().add(pos[L[0]]).multiplyScalar(0.5), out = {};
+    let prev = mid, d = 0; R.forEach((f) => { d += pos[f].distanceTo(prev); out[f] = -d; prev = pos[f]; });
+    prev = mid; d = 0; L.forEach((f) => { d += pos[f].distanceTo(prev); out[f] = d; prev = pos[f]; });
+    return out;
+  }
+  async function ensureReg() {
+    if (S.reg && S.reg.key === S.C.key) return S.reg; if (!S.C || !S.C.ct || !Object.keys(S.jaws).length) return null;
+    const vol = await ensureVol(), c = S.C.ct; let st = { curve: c.curve, levels: c.levels };
+    if (!st.levels) st.levels = window.CT.levels(vol); if (!st.curve || st.curve.length < 3) st.curve = window.CT.autoArch(vol, st.levels.upper); if (!st.curve) return null;
+    const arc = window.CT.resample(window.CT.catmull(st.curve, 12), 1), P = window.CT.pano(vol, st.curve, 8, false), zo = window.CT.occlusalRow(P), reg = { key: S.C.key, st, vol, arc, P, zo, jaw: {} };
+    if (zo == null) return null; P.zo = zo;
+    for (const jn of ['upper', 'lower']) {
+      const sg = signedArch(jn); if (!sg) continue; const teeth = Object.keys(sg).map(Number).map((f) => ({ f, d: sg[f], w: TW[jn][(f % 10) - 1] || 8 })), occ = jn === 'upper' ? window.CT.occupancy(P, zo - 70, zo - 6) : window.CT.occupancy(P, zo + 6, zo + 70);
+      const r = window.CT.register(vol.vx, arc, occ, teeth); if (r) { r.sg = sg; r.occ = occ; reg.jaw[jn] = r; }
+    }
+    S.reg = reg; return reg;
+  }
+  async function toothCt(f) {
+    try {
+      const reg = await ensureReg(); if (!reg) return null; const jn = jawOf(f), r = reg.jaw[jn]; /* score thấp: không dùng */ if (!r || r.score < 0.3 || r.sg[f] == null) return null;
+      const i = Math.round(r.im + r.flip * (r.scale * r.sg[f] + r.shift) / reg.vol.vx);
+      return { img: window.CTView.toothCrop(reg.vol, reg.P, reg.st, i, jn, f), score: r.score };
+    } catch (e) { console.error(e); return null; }
+  }
   async function aiTooth(f) {
     const ctxX = otherCtx(f);
-    const imgs = await toothImages(f), jaw = jawOf(f) === 'upper' ? 'hàm trên' : 'hàm dưới', miss = S.C.marks.missing.filter((x) => jawOf(x) === jawOf(f)).join(', ') || 'không có';
+    const imgs = await toothImages(f), ctc = await toothCt(f); if (ctc) imgs.push(ctc.img);
+    const jaw = jawOf(f) === 'upper' ? 'hàm trên' : 'hàm dưới', miss = S.C.marks.missing.filter((x) => jawOf(x) === jawOf(f)).join(', ') || 'không có';
     const prompt = 'BỆNH ÁN: ghi nhận trên mô hình scan 3D trong miệng (có màu), răng số ' + f + ' (FDI, ' + jaw + '). Ba ảnh: (1) nhìn từ mặt nhai, (2) từ phía ngoài (môi/má), (3) từ phía trong (lưỡi/vòm). Vòng tròn trắng có số là vị trí răng đang xét; các răng khác cũng có số.\n' +
       'Răng đã đánh dấu mất ở hàm này: ' + miss + '.\n' +
+      (ctc ? 'ẢNH 4 LÀ LÁT CẮT CT CỦA ĐÚNG RĂNG NÀY (đã ghép từ scan, sai số vài mm): bên trái là ảnh toàn cảnh cong quanh răng, bên phải là mặt cắt ngang qua răng, nét đứt xanh là vị trí dự kiến của răng; đỉnh ảnh là phía trên (chân răng hàm trên hướng lên, chân răng hàm dưới hướng xuống); thanh vàng 10 mm. Hãy đọc kỹ ảnh 4: chân răng, tủy, chóp, xương quanh răng, sâu, phục hình, đo gần đúng bằng thanh 10 mm. Nếu hình trong ảnh 4 rõ ràng không phải răng này (lệch sang răng bên cạnh, hoặc là khoảng mất răng) thì ghi vào review, không kết luận theo ảnh 4.\n' : '') +
       (ctxX ? 'DỮ LIỆU KHÁC CỦA CÙNG RĂNG NÀY (đã đọc từ X-quang hoặc CT, cho biết phần bên trong mà scan bề mặt không thấy): ' + ctxX + '\nHãy KẾT HỢP: scan cho thấy bề mặt, X-quang/CT cho thấy chân răng, tủy, xương. Điều nào hai nguồn xác nhận cho nhau thì nêu rõ là có cả hai nguồn; điều nào mâu thuẫn thì ghi vào review.\n' : '') +
       'LƯU Ý PHỤC HÌNH: răng đã bọc mão sứ hoặc kim loại (nhìn thấy trên scan, hoặc CT/X-quang báo cản quang mạnh) thì ghi là đã phục hình, KHÔNG đề xuất làm sứ lại; chỉ đề xuất khi thấy rõ hở bờ, sâu thứ phát, viền kim loại lộ, nướu viêm quanh mão hoặc thấu quang quanh chóp.\n' +
       'BƯỚC 0 - KIỂM TRA SỐ RĂNG (bắt buộc): đối chiếu hình thái răng ở vị trí được đánh dấu với số ' + f + ' (răng cửa, nanh, tiền hàm, hàm lớn; số múi, số chân suy ra từ hình dạng mặt nhai; vị trí so với đường giữa; răng khôn). Nếu hình thái hoặc vị trí KHÔNG phù hợp với số này thì đặt numberOk=false và mô tả trong numberNote số răng có vẻ đúng hơn. Nếu không đủ cơ sở thì numberOk=true.\n' +
@@ -1088,5 +1121,5 @@
     const r = await window.api.settings.get(); S.cfg = r.settings; S.hasKey = r.hasKey; S.version = r.version; S.dataPath = r.dataPath; S.packaged = r.packaged;
     $('ver').textContent = 'v' + r.version; show('home');
   })();
-  window.__app = { runScan, FX, flyTo, flipJaw, setHover, setPin, toggleDone, recompute, repaintAll, buildLabels, setView, fitAll, camera, controls, S, importFiles, openCase, placeSeed, startMark, select, render, exportPdf, detectJaw, THREE, jawShot, toothImages };
+  window.__app = { runScan, FX, flyTo, flipJaw, setHover, setPin, toggleDone, recompute, repaintAll, buildLabels, setView, fitAll, camera, controls, S, importFiles, openCase, placeSeed, startMark, select, render, exportPdf, detectJaw, ensureReg, toothCt, THREE, jawShot, toothImages };
 })();

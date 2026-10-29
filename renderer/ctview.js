@@ -14,6 +14,21 @@
     return out;
   }
 
+  function toothCrop(vol, P, st, i, jaw, f) { /* ảnh CT riêng cho một răng: toàn cảnh quanh răng + mặt cắt vuông góc cung hàm */
+    const [lo, hi] = [CT.to8(PRESET.bone[0]), CT.to8(PRESET.bone[1])], zo = P.zo || Math.round(vol.n * 0.5), n = vol.n, hp = Math.round(12 / vol.vx), S = 3;
+    const up = jaw === 'upper', z0 = Math.max(0, up ? zo - 190 : zo - 70), z1 = Math.min(n - 1, up ? zo + 70 : zo + 190), H = z1 - z0 + 1;
+    const x0 = Math.max(0, Math.min(P.w - 2 * hp, i - hp)), sub = { w: 2 * hp, h: H, px: new Uint8Array(2 * hp * H) };
+    for (let z = 0; z < H; z++) for (let x = 0; x < 2 * hp; x++) sub.px[z * 2 * hp + x] = P.px[(z0 + z) * P.w + x0 + x];
+    const A = CT.toCanvas(sub, lo, hi), R = Math.round(16 / vol.vx), cr = CT.cross(vol, P.arc, i, 16, 2), cs = { w: cr.w, h: H, px: new Uint8Array(cr.w * H) };
+    for (let z = 0; z < H; z++) for (let x = 0; x < cr.w; x++) cs.px[z * cr.w + x] = cr.px[(z0 + z) * cr.w + x];
+    const B = CT.toCanvas(cs, lo, hi), gap = 12, c = document.createElement('canvas'); c.width = (A.width + B.width) * S + gap; c.height = H * S + 22; const g = c.getContext('2d'); g.fillStyle = '#000'; g.fillRect(0, 0, c.width, c.height);
+    g.imageSmoothingEnabled = true; g.drawImage(A, 0, 22, A.width * S, H * S); g.drawImage(B, A.width * S + gap, 22, B.width * S, H * S);
+    g.strokeStyle = 'rgba(0,255,255,.8)'; g.lineWidth = 1.5; g.setLineDash([6, 5]); g.beginPath(); const cx = (i - x0) * S; g.moveTo(cx, 22); g.lineTo(cx, c.height); g.stroke(); const cx2 = A.width * S + gap + R * S; g.beginPath(); g.moveTo(cx2, 22); g.lineTo(cx2, c.height); g.stroke(); g.setLineDash([]);
+    const mm = 10 / vol.vx * S; g.strokeStyle = '#ff0'; g.fillStyle = '#ff0'; g.lineWidth = 3; g.beginPath(); g.moveTo(8, c.height - 10); g.lineTo(8 + mm, c.height - 10); g.stroke(); g.font = '12px sans-serif'; g.fillText('10 mm', 12 + mm, c.height - 6);
+    g.fillStyle = '#fff'; g.font = '700 14px sans-serif'; g.fillText('Răng ' + f + ' (dự kiến tại đường nét đứt) · trái: toàn cảnh · phải: mặt cắt ngang qua răng', 6, 15);
+    return c.toDataURL('image/jpeg', 0.9);
+  }
+
   function open(vol, st, hooks) {
     const old = document.getElementById('ctv'); if (old) old.remove();
     const root = el('div', 'cv'); root.id = 'ctv';
@@ -111,5 +126,5 @@
     });
     win('bone'); setPos({}); return { close, state: S };
   }
-  window.CTView = { open, keyImages };
+  window.CTView = { open, keyImages, toothCrop };
 })();

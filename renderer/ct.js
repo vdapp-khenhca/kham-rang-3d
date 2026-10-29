@@ -86,5 +86,40 @@
     for (let i = 0; i < im.px.length; i++) { let v = (im.px[i] - lo) * k; v = v < 0 ? 0 : v > 255 ? 255 : v; if (inv) v = 255 - v; o[i * 4] = o[i * 4 + 1] = o[i * 4 + 2] = v; o[i * 4 + 3] = 255; }
     g.putImageData(d, 0, 0); return c;
   }
-  window.CT = { load, pack, unpack, slice, catmull, resample, levels, autoArch, pano, cross, toCanvas, hu8, to8 };
+    /* ---- ghép scan với CT theo chiều dài cung hàm ---- */
+  function apexIndex(arc) { /* điểm trước nhất của cung hàm = đường giữa */
+    const n = arc.length; let imin = 0, imax = 0; for (let i = 1; i < n; i++) { if (arc[i].y < arc[imin].y) imin = i; if (arc[i].y > arc[imax].y) imax = i; }
+    const ey = (arc[0].y + arc[n - 1].y) / 2; return (ey - arc[imin].y) > (arc[imax].y - ey) ? imin : imax;
+  }
+  function occlusalRow(P) { /* hàng ảnh toàn cảnh nằm giữa hai dải thân răng trên và dưới (mặt phẳng cắn) */
+    const { w, h, px } = P, thr = to8(2000), r = new Float32Array(h), a = Math.floor(w * 0.15), b = Math.floor(w * 0.85);
+    for (let z = 0; z < h; z++) { let c = 0; for (let x = a; x < b; x++) if (px[z * w + x] > thr) c++; r[z] = c; }
+    const sm = new Float32Array(h); for (let z = 0; z < h; z++) { let s = 0, k = 0; for (let j = Math.max(0, z - 6); j <= Math.min(h - 1, z + 6); j++) { s += r[j]; k++; } sm[z] = s / k; }
+    let p1 = 0; for (let z = 0; z < h; z++) if (sm[z] > sm[p1]) p1 = z;
+    let p2 = -1; for (let z = 0; z < h; z++) if (Math.abs(z - p1) >= 40 && (p2 < 0 || sm[z] > sm[p2])) p2 = z;
+    if (p2 < 0 || sm[p2] < sm[p1] * 0.4) return null;
+    const lo = Math.min(p1, p2), hi = Math.max(p1, p2); let zo = lo; for (let z = lo; z <= hi; z++) if (sm[z] < sm[zo]) zo = z; return zo;
+  }
+  function occupancy(P, za, zb) { /* tỷ lệ điểm đặc theo cột của ảnh toàn cảnh trong dải [za, zb] */
+    const { w, h, px } = P, thr = to8(2000), out = new Float32Array(w); za = Math.max(0, za); zb = Math.min(h - 1, zb);
+    for (let x = 0; x < w; x++) { let c = 0, t = 0; for (let z = za; z <= zb; z++) { t++; if (px[z * w + x] > thr) c++; } out[x] = t ? c / t : 0; }
+    const sm = new Float32Array(w), R = 3; for (let i = 0; i < w; i++) { let s = 0, k = 0; for (let j = Math.max(0, i - R); j <= Math.min(w - 1, i + R); j++) { s += out[j]; k++; } sm[i] = s / k; }
+    return sm;
+  }
+  function register(vx, arc, occ, teeth) { /* teeth: [{d (mm, âm = bên phải bệnh nhân), w (mm)}]; tỉ lệ + dịch + lật, so khớp mịn */
+    const im = apexIndex(arc), nS = occ.length, sig = 18, R = sig * 3, ker = []; let ks = 0;
+    for (let x = -R; x <= R; x++) { const v = Math.exp(-x * x / (2 * sig * sig)); ker.push(v); ks += v; } for (let i = 0; i < ker.length; i++) ker[i] /= ks;
+    const smooth = (a) => { const o = new Float32Array(nS); for (let i = 0; i < nS; i++) { let s = 0; for (let k = -R; k <= R; k++) { const j = i + k; if (j >= 0 && j < nS) s += a[j] * ker[k + R]; } o[i] = s; } return o; };
+    const so = smooth(occ); let best = null;
+    for (const flip of [1, -1]) for (let scale = 0.8; scale <= 1.081; scale += 0.02) for (let shift = -5; shift <= 5.01; shift += 1) {
+      const p = new Float32Array(nS);
+      for (const t of teeth) { const c = im + flip * (scale * t.d + shift) / vx, h = t.w * scale / 2 / vx; for (let i = Math.max(0, Math.floor(c - h)); i < Math.min(nS, Math.ceil(c + h)); i++) p[i] = 1; }
+      const sp = smooth(p); let sa = 0, sb = 0, saa = 0, sbb = 0, sab = 0, k = 0;
+      for (let i = 20; i < nS - 20; i++) { const a = so[i], b = sp[i]; sa += a; sb += b; saa += a * a; sbb += b * b; sab += a * b; k++; }
+      const ca = saa - sa * sa / k, cb = sbb - sb * sb / k; if (ca <= 1e-9 || cb <= 1e-9) continue; const r = (sab - sa * sb / k) / Math.sqrt(ca * cb);
+      if (!best || r > best.score) best = { flip, scale, shift, score: r, im };
+    }
+    return best;
+  }
+  window.CT = { apexIndex, occlusalRow, occupancy, register, load, pack, unpack, slice, catmull, resample, levels, autoArch, pano, cross, toCanvas, hu8, to8 };
 })();
