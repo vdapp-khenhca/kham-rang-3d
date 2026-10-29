@@ -377,7 +377,7 @@
         '<div class="hbtns"><button class="btn" type="button" data-hud="ok">Số răng đúng, bắt đầu AI quét</button><button class="btn ghost sm" type="button" data-hud="stop">Hủy</button></div>'; return;
     }
     const jn = sc.jaw === 'upper' ? 'Hàm trên' : sc.jaw === 'lower' ? 'Hàm dưới' : '';
-    const title = sc.phase === 'detect' ? 'Đang nhận diện răng · ' + jn : sc.phase === 'ai' ? 'AI đang quét · ' + jn : sc.phase === 'pano' ? 'AI đang đọc ảnh X-quang' : 'Đang soạn nhận định tổng quan';
+    const title = sc.phase === 'detect' ? 'Đang nhận diện răng · ' + jn : sc.phase === 'ai' ? 'AI đang quét · ' + jn : sc.phase === 'pano' ? 'AI đang đọc ảnh X-quang' : sc.phase === 'ct' ? 'AI đang đọc CT 3D' : 'Đang soạn nhận định tổng quan';
     const sub = sc.phase === 'ai' ? 'Răng ' + (sc.cur || '…') + ' · ' + sc.done + '/' + sc.total : sc.phase === 'detect' ? 'Tìm ranh giới và số thứ tự từng răng' : 'Gần xong';
     const pct = sc.phase === 'ai' && sc.total ? Math.round((100 * sc.done) / sc.total) : sc.phase === 'detect' ? 8 : 96;
     h.innerHTML = '<div class="hrow"><b>' + esc(title) + '</b><button class="btn ghost sm" type="button" data-hud="stop">Dừng</button></div><div class="hsub">' + esc(sub) + '</div><div class="pb"><i style="width:' + pct + '%"></i></div>';
@@ -449,6 +449,7 @@
           await Promise.all([worker(), worker(), worker()]);
         }
         if (!sc.cancel && S.C && S.C.pano && S.pano.url && !S.C.pano.result) { sc.phase = 'pano'; renderHud(); await runPano(true); }
+        if (!sc.cancel && S.C && S.C.ct && !S.C.ct.result) { sc.phase = 'ct'; renderHud(); await runCt(true); }
         if (!sc.cancel && S.C && !sc.fail.length && (opts.all || !S.C.report.summary) && Object.keys(S.C.teeth).length) { sc.phase = 'report'; renderHud(); await aiReport(true); }
       }
     } catch (e) { console.error(e); sc.err = cleanErr(e); }
@@ -456,18 +457,112 @@
     if (S.C) { showBothJaws(); S.sel = null; repaintAll(); render(); }
     toast(cancelled ? 'Đã dừng quét' : bad ? 'Quét xong, ' + bad + ' răng lỗi (' + sc.err + '). Bấm "Quét AI" để quét nốt.' : sc.warn.length ? sc.warn[0] : 'Đã quét xong. Bác sĩ xem lại kết quả từng răng.');
   }
+  const loadImg = (url) => new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = () => rej(new Error('Không mở được ảnh')); im.src = url; });
+
+
+  /* ================= CT 3D (CBCT) ================= */
+  async function ensureVol() {
+    if (S.vol) return S.vol; if (!S.C || !S.C.ct) throw new Error('Hồ sơ chưa có CT');
+    toast('Đang nạp CT…'); const buf = await window.api.cases.loadBlob(S.C.key, 'ct.vol'); if (!buf) throw new Error('Không tìm thấy dữ liệu CT trong máy này'); S.vol = await window.CT.unpack(toAB(buf)); return S.vol;
+  }
+  async function importCt(files) {
+    const prog = (t, f) => { $('busy').hidden = false; const b = $('busy'); b.dataset.t = t; b.textContent = ''; b.setAttribute('aria-label', t); toast(t + ' (' + Math.round(f * 100) + '%)'); };
+    $('busy').hidden = false;
+    try {
+      const items = []; for (const f of files) items.push({ name: f.name, buf: toAB(await bytesOf(f)) });
+      const vol = await window.CT.load(items, prog), m = vol.meta || {}, nm = String(m.name || '').toUpperCase();
+      if (!(S.view === 'case' && S.C)) {
+        const nm2 = nm || 'KHACH', key = slugOf(nm2), ex = await window.api.cases.load(key);
+        S.C = ex ? ex.data : newCase(key, nm2); S.C.marks = S.C.marks || { upper: [], lower: [], missing: [] }; S.C.teeth = S.C.teeth || {}; S.C.care = S.C.care || []; S.C.report = S.C.report || { summary: '', advice: '', risks: '' };
+        clearJaws(); S.pano = { url: '', busy: false, err: '' }; if (ex && ex.scans && ex.scans.pano) S.pano.url = URL.createObjectURL(new Blob([toAB(ex.scans.pano.buf)], { type: 'image/jpeg' })); await window.api.cases.save(key, S.C); enterCase();
+      } else if (nm && S.C.patient && S.C.patient.name && normName(nm) !== normName(S.C.patient.name)) toast('Chú ý: tên trên CT (' + nm + ') khác tên hồ sơ (' + S.C.patient.name + ').');
+      toast('Đang lưu CT vào hồ sơ…'); const packed = await window.CT.pack(vol); await window.api.cases.saveBlob(S.C.key, 'ct.vol', packed);
+      S.vol = vol; S.C.ct = { date: todayIso(), w: vol.w, h: vol.h, n: vol.n, vx: vol.vx, vz: vol.vz, meta: { maker: m.maker || '', model: m.model || '', age: m.age || '', sex: m.sex || '', study: m.study || '', name: m.name || '' }, curve: null, z: null, levels: null, result: null };
+      persist(); S.tab = 'scan'; syncTabs(); render(); toast('Đã nạp CT ' + vol.n + ' lát'); $('busy').hidden = true; openCt();
+    } catch (er) { console.error(er); toast('Không đọc được CT: ' + cleanErr(er)); } finally { $('busy').hidden = true; }
+  }
+  async function openCt() {
+    try { const vol = await ensureVol(), c = S.C.ct; window.CTView.open(vol, { curve: c.curve, z: c.z, levels: c.levels }, { onChange: (st) => { Object.assign(S.C.ct, { curve: st.curve, z: st.z, levels: st.levels }); persist(); } }); } catch (er) { toast(cleanErr(er)); }
+  }
+  async function runCt(quiet) {
+    if (!S.hasKey) { toast('Chưa có khóa API. Vào Cài đặt để nhập khóa OpenAI.'); return; }
+    if (!S.C.ct) return; S.ctBusy = true; S.ctErr = ''; if (!quiet) render();
+    try {
+      const vol = await ensureVol(), c = S.C.ct; let st = { curve: c.curve, levels: c.levels };
+      if (!st.curve || st.curve.length < 3) { st.levels = window.CT.levels(vol); st.curve = window.CT.autoArch(vol, st.levels.upper); if (!st.curve) throw new Error('Không dò được cung hàm trên CT. Mở trình xem CT, chỉnh cung hàm rồi đọc lại.'); c.curve = st.curve; c.levels = st.levels; c.z = st.levels.upper; }
+      const shots = window.CTView.keyImages(vol, st), have = [], gone = S.C.marks.missing.slice(); ['upper', 'lower'].forEach((jn) => { const J = S.jaws[jn]; if (J) J.seeds.forEach((q) => have.push(q.f)); });
+      const P = S.C.patient || {}, m = c.meta || {};
+      const prompt = 'Bạn là bác sĩ chuyên khoa Răng Hàm Mặt kiêm chẩn đoán hình ảnh, đọc phim CT chùm tia hình nón (CBCT) của khách (' + (m.age ? 'tuổi ' + String(m.age).replace(/^0+/, '').replace('Y', '') + ', ' : '') + (m.sex ? 'giới ' + m.sex + ', ' : '') + 'độ phân giải ' + c.vx + ' mm, tiền sử: ' + (P.history || 'không ghi') + ').\n' +
+        'Có 4 ảnh dựng từ khối CT: (1) ảnh toàn cảnh cong dựng theo cung hàm, bên TRÁI ảnh là bên PHẢI bệnh nhân; (2) lát cắt ngang ở mức thân răng hàm trên; (3) lát cắt ngang ở mức thân răng hàm dưới (trên lát ngang, phía trước bệnh nhân ở phía trên ảnh, bên phải bệnh nhân ở bên trái ảnh); (4) dải 8 mặt cắt vuông góc cung hàm lấy đều từ đầu đến cuối cung hàm, từ phải sang trái của bệnh nhân (mỗi ô là một vị trí, bên trên là hàm trên).\n' +
+        'Dữ liệu scan 3D trong miệng để đối chiếu (có thể sai): răng đang có: ' + (have.sort((a, b) => ordOf(a) - ordOf(b)).join(', ') || 'chưa có') + '; răng được coi là mất: ' + (gone.join(', ') || 'không') + '.\n' +
+        'ĐỌC CT CÓ HỆ THỐNG, theo ký hiệu FDI, chỉ ghi điều NHÌN THẤY, dùng "có thể", "nghi ngờ", không khẳng định chẩn đoán:\n' +
+        '1) Răng: có hay mất, răng ngầm hoặc lệch (răng khôn: vị trí, độ sâu, liên quan ống răng dưới), chân sót, implant, số chân và hình thái chân răng, chân cong, dị dạng; sâu thân răng hoặc cổ răng; phục hình kim loại gây nhiễu ảnh.\n' +
+        '2) Tủy và quanh chóp: thấu quang quanh chóp (vị trí, kích thước ước lượng), điều trị tủy (đủ chiều dài, thiếu, thừa), tiêu chân răng trong hoặc ngoài, gãy dọc chân răng, vôi hóa buồng tủy.\n' +
+        '3) Xương ổ răng và nha chu: mất xương ngang hoặc dọc (răng nào, mặt nào, mức độ), khuyết xương mặt ngoài hoặc mặt trong, tổn thương chẽ chân răng, độ dày và chiều cao xương, xương vỏ có liên tục không.\n' +
+        '4) Cấu trúc giải phẫu: xoang hàm (dày niêm mạc, mờ, polyp, đáy xoang liên quan chóp răng trên), ống răng dưới (đường đi, khoảng cách tới chóp răng cần can thiệp), lỗ cằm, vách ngăn mũi, khớp thái dương hàm (lồi cầu, ổ chảo), đường thở nếu thấy, xương hàm: nang, u, tổn thương thấu quang hay cản quang, vôi hóa.\n' +
+        '5) Đối chiếu với scan 3D: răng nào scan ghi có mà CT không thấy (hoặc ngược lại) thì ghi vào "mismatch".\n' +
+        'Dịch vụ đề xuất chọn từ: ' + CATALOG.join('; ') + ' (có thể thêm tên ngắn gọn); chỉ khi có căn cứ trên CT; priority "cao" khi cần xử lý sớm (thấu quang quanh chóp, nang, răng ngầm gây biến chứng, nhiễm trùng nghi ngờ).\n' +
+        'Trả về JSON: {"quality":"chất lượng ảnh, nhiễu do kim loại, phần chưa đọc được","summary":"3-6 câu tổng quan","teeth":[{"f":36,"status":"co|mat|implant|ngam|chan_sot","text":"nhận định ngắn cho răng này","services":[{"name":"...","priority":"cao|trung bình|thấp","why":"1 câu"}]}],"sections":{"xuong_nha_chu":"...","xoang_ham":"...","ong_rang_duoi":"...","khop_thai_duong_ham":"...","bat_thuong_khac":"..."},"general":["điều chung cần lưu ý"],"mismatch":["đối chiếu với scan 3D"],"review":["điều cần bác sĩ xác nhận trực tiếp trên phần mềm CT, đo đạc cần làm"]}. Chỉ liệt kê trong "teeth" các răng có điều đáng ghi hoặc trạng thái đặc biệt. Viết tiếng Việt.';
+      const res = await window.api.ai.run({ prompt, images: shots });
+      const finds = (res.teeth || []).filter((x) => ORDER.indexOf(+x.f) >= 0).slice(0, 32), date = todayIso(), sec = res.sections && typeof res.sections === 'object' ? res.sections : {};
+      const lbl = { xuong_nha_chu: 'Xương và nha chu', xoang_ham: 'Xoang hàm', ong_rang_duoi: 'Ống răng dưới', khop_thai_duong_ham: 'Khớp thái dương hàm', bat_thuong_khac: 'Bất thường khác' };
+      const secs = Object.keys(lbl).map((k) => (sec[k] && String(sec[k]).trim() ? { k: lbl[k], v: String(sec[k]).trim() } : null)).filter(Boolean);
+      const rv = (res.review || []).slice(0, 6).map(String); (res.mismatch || []).slice(0, 6).reverse().forEach((x) => rv.unshift('⚠ Đối chiếu scan 3D: ' + x));
+      c.result = { quality: String(res.quality || ''), summary: String(res.summary || ''), general: (res.general || []).slice(0, 8).map(String), sections: secs, review: rv, count: finds.length, date };
+      finds.forEach((x) => { const f = +x.f, log = (S.C.teeth[f] = (S.C.teeth[f] || []).filter((e) => !(e.kind === 'ai' && e.src === 'ct'))); log.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 5), kind: 'ai', src: 'ct', who: 'AI (GPT) · CT 3D', date, ai: { observations: [String(x.text || '')].filter(Boolean), impression: String(x.text || ''), services: (x.services || []).slice(0, 5), review: [] } }); });
+      persist(); repaintAll(); if (!quiet) toast('Đã đọc xong CT');
+    } catch (e) { S.ctErr = cleanErr(e); } finally { S.ctBusy = false; if (!quiet) render(); }
+  }
+  /* ---- xem phim X-quang: phóng to, kéo, chỉnh sáng, đảo màu, đo ---- */
+  function openXray() {
+    if (!S.pano.url) return; const old = document.getElementById('xv'); if (old) old.remove();
+    const pm = (S.C.pano && S.C.pano.meta) || {}, sp = pm.spacing || 0, el = document.createElement('div'); el.id = 'xv'; el.className = 'xv';
+    el.innerHTML = '<div class="xvb"><b>Phim X-quang</b><label>Sáng <input type="range" id="xvB" min="40" max="220" value="100"></label><label>Tương phản <input type="range" id="xvC" min="40" max="300" value="110"></label><button class="btn ghost sm" type="button" id="xvI">Đảo màu</button><button class="btn ghost sm" type="button" id="xvR">Thước đo</button><button class="btn ghost sm" type="button" id="xvF">Vừa khung</button><span class="muted small" id="xvT"></span><span style="flex:1"></span><button class="btn sm" type="button" id="xvX">Đóng</button></div><div class="xvs" id="xvS"><img id="xvM" src="' + S.pano.url + '" draggable="false"><svg id="xvL" class="xvl"></svg></div>';
+    document.body.appendChild(el);
+    const stage = el.querySelector('#xvS'), img = el.querySelector('#xvM'), svg = el.querySelector('#xvL'), T = { s: 1, x: 0, y: 0, inv: false, ruler: false, pts: [] };
+    const apply = () => { const b = +el.querySelector('#xvB').value, c = +el.querySelector('#xvC').value; img.style.filter = 'brightness(' + b + '%) contrast(' + c + '%)' + (T.inv ? ' invert(1)' : ''); const tr = 'translate(' + T.x + 'px,' + T.y + 'px) scale(' + T.s + ')'; img.style.transform = tr; svg.style.transform = tr; };
+    const fit = () => { const r = stage.getBoundingClientRect(), w = img.naturalWidth, h = img.naturalHeight; T.s = Math.min(r.width / w, r.height / h); T.x = (r.width - w * T.s) / 2; T.y = (r.height - h * T.s) / 2; apply(); };
+    const draw = () => { const [a, b] = T.pts, sw = 2 / T.s; let h = ''; if (a) h += '<circle cx="' + a.x + '" cy="' + a.y + '" r="' + 5 / T.s + '" fill="#14e0c8"/>'; if (a && b) { h += '<line x1="' + a.x + '" y1="' + a.y + '" x2="' + b.x + '" y2="' + b.y + '" stroke="#14e0c8" stroke-width="' + sw + '"/><circle cx="' + b.x + '" cy="' + b.y + '" r="' + 5 / T.s + '" fill="#14e0c8"/>'; const px = Math.hypot(a.x - b.x, a.y - b.y); el.querySelector('#xvT').textContent = sp ? 'Đo: ' + (px * sp).toFixed(1) + ' mm (ước lượng, panorama có độ phóng đại)' : 'Đo: ' + Math.round(px) + ' điểm ảnh'; } svg.innerHTML = h; };
+    svg.setAttribute('width', img.naturalWidth || 2700);
+    img.onload = () => { svg.setAttribute('width', img.naturalWidth); svg.setAttribute('height', img.naturalHeight); fit(); }; if (img.complete && img.naturalWidth) { svg.setAttribute('width', img.naturalWidth); svg.setAttribute('height', img.naturalHeight); fit(); }
+    stage.addEventListener('wheel', (e) => { e.preventDefault(); const r = stage.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top, k = e.deltaY < 0 ? 1.18 : 1 / 1.18, ns = Math.min(12, Math.max(0.1, T.s * k)); T.x = mx - (mx - T.x) * (ns / T.s); T.y = my - (my - T.y) * (ns / T.s); T.s = ns; apply(); draw(); }, { passive: false });
+    let drag = null; stage.addEventListener('mousedown', (e) => { if (T.ruler) { const r = stage.getBoundingClientRect(), p = { x: (e.clientX - r.left - T.x) / T.s, y: (e.clientY - r.top - T.y) / T.s }; if (T.pts.length >= 2) T.pts = []; T.pts.push(p); draw(); return; } drag = { x: e.clientX - T.x, y: e.clientY - T.y }; stage.style.cursor = 'grabbing'; });
+    window.addEventListener('mousemove', xmove); window.addEventListener('mouseup', xup);
+    function xmove(e) { if (drag) { T.x = e.clientX - drag.x; T.y = e.clientY - drag.y; apply(); } } function xup() { drag = null; stage.style.cursor = ''; }
+    el.addEventListener('input', apply);
+    el.addEventListener('click', (e) => { const id = e.target.id; if (id === 'xvX') { window.removeEventListener('mousemove', xmove); window.removeEventListener('mouseup', xup); el.remove(); } else if (id === 'xvI') { T.inv = !T.inv; apply(); } else if (id === 'xvF') fit(); else if (id === 'xvR') { T.ruler = !T.ruler; T.pts = []; draw(); e.target.classList.toggle('on', T.ruler); stage.style.cursor = T.ruler ? 'crosshair' : ''; el.querySelector('#xvT').textContent = T.ruler ? 'Bấm 2 điểm trên phim để đo' : ''; } });
+  }
   async function runPano(quiet) {
     if (!S.hasKey) { toast('Chưa có khóa API. Vào Cài đặt để nhập khóa OpenAI.'); return; }
-    if (!S.pano.url) { toast('Chưa có ảnh X-quang. Hãy thêm ảnh panorama hoặc phim răng.'); return; }
+    if (!S.pano.url) { toast('Chưa có ảnh X-quang. Hãy thêm phim panorama hoặc phim răng.'); return; }
     S.pano.busy = true; S.pano.err = ''; if (!quiet) render();
     try {
-      const prompt = 'Đây là ảnh X-quang răng (toàn cảnh panorama hoặc phim cận chóp) của khách. Bạn đọc phim như bác sĩ chuyên khoa Răng Hàm Mặt. Hãy nêu những gì NHÌN THẤY, theo ký hiệu răng FDI (đếm răng từ đường giữa, chú ý phim panorama bên phải bệnh nhân nằm bên TRÁI ảnh): răng sâu lớn hoặc tổn thương quanh chóp nghi ngờ, răng đã điều trị tủy, mão hoặc cầu, implant, răng khôn ngầm hoặc lệch, tiêu xương quanh răng, răng mất, xoang hàm hoặc cấu trúc bất thường. Chỉ nói điều thấy rõ, dùng từ "có thể", "nghi ngờ", không khẳng định chẩn đoán. Nếu ảnh không phải X-quang răng thì trả summary nói rõ và để findings rỗng.\n' +
-        'Dịch vụ đề xuất chọn từ: ' + CATALOG.join('; ') + ' (có thể thêm tên khác ngắn gọn).\nTrả về JSON: {"summary":"2-4 câu tổng quan","findings":[{"f":36,"text":"nhận định ngắn cho răng này","services":[{"name":"...","priority":"cao|trung bình|thấp","why":"1 câu"}]}],"general":["điều chung cần lưu ý, ví dụ tiêu xương, xoang"],"review":["điều cần bác sĩ xác nhận"]}. Viết tiếng Việt.';
-      const res = await window.api.ai.run({ prompt, images: [S.pano.url] });
-      const finds = (res.findings || []).filter((x) => ORDER.indexOf(+x.f) >= 0).slice(0, 32), date = todayIso();
-      S.C.pano = Object.assign({}, S.C.pano, { result: { summary: String(res.summary || ''), general: (res.general || []).slice(0, 8), review: (res.review || []).slice(0, 6), count: finds.length, date } });
+      const im = await loadImg(S.pano.url), base = document.createElement('canvas'); base.width = im.naturalWidth; base.height = im.naturalHeight; base.getContext('2d').drawImage(im, 0, 0);
+      const wide = base.width / base.height > 1.5, shots = [];
+      { const k = Math.min(1, 1900 / base.width), c = document.createElement('canvas'); c.width = Math.round(base.width * k); c.height = Math.round(base.height * k); c.getContext('2d').drawImage(base, 0, 0, c.width, c.height); shots.push(c.toDataURL('image/jpeg', 0.9)); }
+      if (wide) { shots.push(window.DICOM.enhance(base, [0.1, 0.14, 0.56, 0.93], 1500).toDataURL('image/jpeg', 0.9)); shots.push(window.DICOM.enhance(base, [0.44, 0.14, 0.9, 0.93], 1500).toDataURL('image/jpeg', 0.9)); }
+      const have = [], gone = []; ['upper', 'lower'].forEach((jn) => { const J = S.jaws[jn]; if (J && J.seeds.length) { J.seeds.forEach((q) => have.push(q.f)); } }); S.C.marks.missing.forEach((f) => gone.push(f));
+      const m = S.C.pano && S.C.pano.meta || {}, P = S.C.patient || {};
+      const prompt = 'Bạn là bác sĩ chuyên khoa Răng Hàm Mặt, đọc phim X-quang răng của khách (' + (m.age ? 'tuổi ' + String(m.age).replace(/^0+/, '').replace('Y', '') + ', ' : '') + (m.sex ? 'giới ' + m.sex + ', ' : '') + 'tiền sử: ' + (P.history || 'không ghi') + ').\n' +
+        (wide ? 'Có ' + shots.length + ' ảnh: ảnh 1 là toàn cảnh (panorama); ảnh 2 là nửa BÊN PHẢI của bệnh nhân (bên TRÁI ảnh) và ảnh 3 là nửa BÊN TRÁI của bệnh nhân (bên PHẢI ảnh), đã tăng tương phản cục bộ để thấy rõ chân răng, xương, ống tủy. Theo quy ước, bên trái của ảnh là bên phải bệnh nhân; hãy kiểm tra chữ R/L trên phim nếu có.\n' : 'Có 1 ảnh X-quang (cận chóp hoặc cắn cánh). Nếu là phim cận chóp thì chỉ nhận định các răng nhìn thấy.\n') +
+        'Dữ liệu từ scan 3D trong miệng (để đối chiếu, có thể sai): răng đang có: ' + (have.sort((a, b) => ordOf(a) - ordOf(b)).join(', ') || 'chưa có dữ liệu') + '; răng được coi là mất: ' + (gone.join(', ') || 'không') + '.\n' +
+        'ĐỌC PHIM CÓ HỆ THỐNG, theo ký hiệu FDI, chỉ ghi điều NHÌN THẤY, dùng "có thể", "nghi ngờ", không khẳng định chẩn đoán:\n' +
+        '1) Chất lượng phim: đặt sai tư thế, chồng ảnh, mờ; điều gì làm hạn chế việc đọc.\n' +
+        '2) Mỗi răng: có hay mất; răng ngầm hoặc lệch (răng khôn: phân loại Winter, Pell-Gregory nếu thấy); chân sót; implant; răng sữa.\n' +
+        '3) Mô cứng: sâu (thấu quang ở thân răng, sâu kẽ, sâu dưới phục hình), mức độ gần tủy; phục hình trám, mão, cầu, chốt; điều trị tủy (đủ chiều dài, trám kín hay thiếu, có khoảng trống); thấu quang quanh chóp; tiêu chân răng; gãy chân.\n' +
+        '4) Nha chu: mức xương ổ răng (tiêu xương ngang hoặc dọc, vị trí), vôi răng dưới nướu, tổn thương chẽ chân răng, khoảng dây chằng nha chu rộng.\n' +
+        '5) Cấu trúc: xoang hàm (dày niêm mạc, mờ, đáy xoang gần chóp), ống răng dưới, lỗ cằm (khoảng cách tới chóp răng cần can thiệp), khớp thái dương hàm (lồi cầu), góc hàm, xương móng, bất thường khác (nang, tổn thương thấu quang hoặc cản quang, vôi hóa).\n' +
+        '6) Đối chiếu với scan 3D: răng nào scan 3D ghi có mà phim không thấy (hoặc ngược lại) thì ghi vào "mismatch".\n' +
+        'Dịch vụ đề xuất chọn từ: ' + CATALOG.join('; ') + ' (có thể thêm tên ngắn gọn); chỉ khi có căn cứ trên phim; priority "cao" khi cần xử lý sớm (thấu quang quanh chóp, sâu sát tủy, nhiễm trùng nghi ngờ, răng ngầm gây biến chứng).\n' +
+        'Trả về JSON: {"quality":"nhận xét chất lượng phim","summary":"3-5 câu tổng quan","teeth":[{"f":36,"status":"co|mat|implant|ngam|chan_sot","text":"nhận định ngắn cho răng này","services":[{"name":"...","priority":"cao|trung bình|thấp","why":"1 câu"}]}],"sections":{"xuong_nha_chu":"...","xoang_ham":"...","ong_rang_duoi":"...","khop_thai_duong_ham":"...","bat_thuong_khac":"..."},"general":["điều chung cần lưu ý"],"mismatch":["đối chiếu với scan 3D"],"review":["điều cần bác sĩ xác nhận, nên chụp thêm gì (CBCT, phim cận chóp...)"]}. Chỉ liệt kê trong "teeth" các răng có điều đáng ghi hoặc trạng thái đặc biệt (mất, ngầm, implant). Viết tiếng Việt.';
+      const res = await window.api.ai.run({ prompt, images: shots });
+      const finds = (res.teeth || res.findings || []).filter((x) => ORDER.indexOf(+x.f) >= 0).slice(0, 32), date = todayIso(), sec = res.sections && typeof res.sections === 'object' ? res.sections : {};
+      const lbl = { xuong_nha_chu: 'Xương và nha chu', xoang_ham: 'Xoang hàm', ong_rang_duoi: 'Ống răng dưới', khop_thai_duong_ham: 'Khớp thái dương hàm', bat_thuong_khac: 'Bất thường khác' };
+      const secs = Object.keys(lbl).map((k) => (sec[k] && String(sec[k]).trim() ? { k: lbl[k], v: String(sec[k]).trim() } : null)).filter(Boolean);
+      const rv = (res.review || []).slice(0, 6).map(String); (res.mismatch || []).slice(0, 6).reverse().forEach((x) => rv.unshift('⚠ Đối chiếu scan 3D: ' + x));
+      S.C.pano = Object.assign({}, S.C.pano, { result: { quality: String(res.quality || ''), summary: String(res.summary || ''), general: (res.general || []).slice(0, 8).map(String), sections: secs, review: rv, count: finds.length, date } });
       finds.forEach((x) => { const f = +x.f, log = (S.C.teeth[f] = (S.C.teeth[f] || []).filter((e) => !(e.kind === 'ai' && e.src === 'pano'))); log.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 5), kind: 'ai', src: 'pano', who: 'AI (GPT) · X-quang', date, ai: { observations: [String(x.text || '')].filter(Boolean), impression: String(x.text || ''), services: (x.services || []).slice(0, 5), review: [] } }); });
-      persist(); repaintAll(); if (!quiet) toast('Đã đọc xong ảnh X-quang');
+      persist(); repaintAll(); if (!quiet) toast('Đã đọc xong phim X-quang');
     } catch (e) { S.pano.err = cleanErr(e); } finally { S.pano.busy = false; if (!quiet) render(); }
   }
   async function aiReport(quiet) {
@@ -530,7 +625,7 @@
     if (lastAi) {
       aiLatest(f).forEach((la) => {
         const a = la.ai || {}; a.observations = a.observations || []; a.services = a.services || [];
-        h += '<div class="aisrc"><div class="lbl">' + (la.src === 'pano' ? 'Từ ảnh X-quang' : 'Từ scan 3D') + '</div><p>' + esc(a.impression) + '</p>' + (a.observations.length > 1 || (a.observations.length === 1 && a.observations[0] !== a.impression) ? '<ul class="l small">' + a.observations.map((o) => '<li>' + esc(o) + '</li>').join('') + '</ul>' : '') +
+        h += '<div class="aisrc"><div class="lbl">' + (la.src === 'pano' ? 'Từ ảnh X-quang' : la.src === 'ct' ? 'Từ CT 3D' : 'Từ scan 3D') + '</div><p>' + esc(a.impression) + '</p>' + (a.observations.length > 1 || (a.observations.length === 1 && a.observations[0] !== a.impression) ? '<ul class="l small">' + a.observations.map((o) => '<li>' + esc(o) + '</li>').join('') + '</ul>' : '') +
           (a.services.length ? '<div class="row">' + a.services.map((x) => '<span class="b ' + (x.priority === 'cao' ? 'risk' : x.priority === 'thấp' ? 'none' : 'pend') + '">' + esc(x.name) + ' · ' + esc(x.priority) + '</span>').join('') + '</div><ul class="l small muted">' + a.services.filter((x) => x.why).map((x) => '<li><b>' + esc(x.name) + ':</b> ' + esc(x.why) + '</li>').join('') + '</ul>' : '') +
           (a.review && a.review.length ? '<div class="callout">Cần bác sĩ xác nhận: ' + a.review.map(esc).join('; ') + '</div>' : '') + '<p class="muted small">' + esc(la.who) + ' · ' + fmt(la.date) + '. Gợi ý từ hình ảnh, không thay thế khám lâm sàng.</p></div>';
       });
@@ -572,13 +667,23 @@
     h += '<div class="card"><h3>Kiểm tra số răng</h3><p class="small muted">Máy tự đoán vị trí và số thứ tự răng từ scan, nên bác sĩ hãy nhìn lướt các số trên mô hình. Nếu thấy nhầm, sửa ngay tại đây:</p><div class="row">';
     ['upper', 'lower'].forEach((jn) => { if (!S.jaws[jn]) return; h += '<button class="btn ghost sm" type="button" data-act="redetect" data-jaw="' + jn + '"' + (sc.busy ? ' disabled' : '') + '>Nhận diện lại ' + jawName(jn) + '</button><button class="btn ghost sm" type="button" data-act="flip" data-jaw="' + jn + '"' + (sc.busy ? ' disabled' : '') + '>Đảo trái/phải ' + jawName(jn) + '</button>'; });
     h += '</div><p class="small muted">Một răng sai vị trí: vào tab "Thăm khám của bác sĩ", chọn răng đó rồi bấm "Chỉnh lại vị trí". Muốn tự bấm cả hàm: nút "Đánh dấu thủ công" phía trên mô hình.' + (det.upper || det.lower ? '' : '') + '</p></div>';
-    h += '<div class="card"><div class="row sp"><h3>X-quang / Panorama</h3><label class="btn ghost sm" style="cursor:pointer">' + (S.pano.url ? 'Đổi ảnh' : 'Thêm ảnh') + '<input type="file" id="panoFile" accept="image/png,image/jpeg,image/webp" hidden></label></div>';
+    h += '<div class="card"><div class="row sp"><h3>X-quang / Panorama</h3><label class="btn ghost sm" style="cursor:pointer">' + (S.pano.url ? 'Đổi phim' : 'Thêm phim') + '<input type="file" id="panoFile" accept="image/png,image/jpeg,image/webp,.dcm,.dicom" hidden></label></div>';
     if (S.pano.url) {
-      h += '<img class="pano" src="' + S.pano.url + '" alt="Ảnh X-quang của khách"><div class="row"><button class="btn sm" type="button" id="runpano"' + (S.pano.busy ? ' disabled' : '') + '>' + (S.pano.busy ? 'Đang đọc ảnh…' : S.C.pano && S.C.pano.result ? 'Đọc lại ảnh' : 'AI đọc ảnh X-quang') + '</button></div>';
+      const pm = S.C.pano && S.C.pano.meta;
+      h += '<img class="pano" id="panoImg" src="' + S.pano.url + '" alt="Phim X-quang của khách" title="Bấm để phóng to">' + (pm && (pm.maker || pm.age) ? '<p class="muted small">' + esc([pm.maker, pm.model, pm.modality, pm.age ? 'tuổi ' + String(pm.age).replace(/^0+/, '').replace('Y', '') : '', pm.study ? fmt(pm.study.slice(0, 4) + '-' + pm.study.slice(4, 6) + '-' + pm.study.slice(6, 8)) : ''].filter(Boolean).join(' · ')) + '</p>' : '') +
+        '<div class="row"><button class="btn ghost sm" type="button" id="panoZoom">Phóng to, chỉnh sáng, đo</button><button class="btn sm" type="button" id="runpano"' + (S.pano.busy ? ' disabled' : '') + '>' + (S.pano.busy ? 'Đang đọc phim…' : S.C.pano && S.C.pano.result ? 'Đọc lại phim' : 'AI đọc phim X-quang') + '</button></div>';
       if (S.pano.err) h += '<p class="err">' + esc(S.pano.err) + '</p>';
-      const r = S.C.pano && S.C.pano.result; if (r) h += '<p>' + esc(r.summary) + '</p>' + (r.general.length ? '<ul class="l small">' + r.general.map((x) => '<li>' + esc(x) + '</li>').join('') + '</ul>' : '') + (r.review.length ? '<div class="callout">Cần bác sĩ xác nhận: ' + r.review.map(esc).join('; ') + '</div>' : '') + '<p class="muted small">' + r.count + ' răng có ghi nhận từ X-quang (xem trong hồ sơ từng răng). ' + fmt(r.date) + '</p>';
-    } else h += '<p class="small muted">Thêm ảnh X-quang toàn cảnh (JPG, PNG) để AI đọc cùng với scan 3D. CT dạng DICOM chưa đọc trực tiếp được, hãy xuất ảnh lát cắt hoặc ảnh toàn cảnh.</p>';
+      const r = S.C.pano && S.C.pano.result;
+      if (r) h += (r.quality ? '<p class="muted small">Chất lượng phim: ' + esc(r.quality) + '</p>' : '') + '<p>' + esc(r.summary) + '</p>' + ((r.sections || []).length ? '<div class="secl">' + r.sections.map((x) => '<div><b>' + esc(x.k) + '.</b> ' + esc(x.v) + '</div>').join('') + '</div>' : '') + (r.general.length ? '<ul class="l small">' + r.general.map((x) => '<li>' + esc(x) + '</li>').join('') + '</ul>' : '') + (r.review.length ? '<div class="callout">Cần bác sĩ xác nhận:<ul class="l small">' + r.review.map((x) => '<li>' + esc(x) + '</li>').join('') + '</ul></div>' : '') + '<p class="muted small">' + r.count + ' răng có ghi nhận từ X-quang (xem trong hồ sơ từng răng). ' + fmt(r.date) + '</p>';
+    } else h += '<p class="small muted">Thêm phim X-quang toàn cảnh: đọc được trực tiếp file DICOM (.dcm) từ máy chụp, hoặc ảnh JPG, PNG. Có thể thả cả file zip chứa .dcm vào cửa sổ.</p>';
     h += '</div>';
+    { const c = S.C.ct, r = c && c.result;
+      h += '<div class="card"><div class="row sp"><h3>CT 3D (CBCT)</h3><label class="btn ghost sm" style="cursor:pointer">' + (c ? 'Đổi CT' : 'Thêm CT') + '<input type="file" id="ctFile" accept=".dcm,.dicom,.zip" multiple hidden></label></div>';
+      if (c) h += '<p class="muted small">' + [c.meta && c.meta.maker, c.meta && c.meta.model, c.n + ' lát', c.w + '×' + c.h, c.vx + ' mm', fmt(c.date)].filter(Boolean).map(esc).join(' · ') + '</p><div class="row"><button class="btn ghost sm" type="button" id="ctOpen">Mở trình xem CT</button><button class="btn sm" type="button" id="ctRun"' + (S.ctBusy ? ' disabled' : '') + '>' + (S.ctBusy ? 'Đang đọc CT…' : r ? 'Đọc lại CT' : 'AI đọc CT') + '</button></div>';
+      else h += '<p class="small muted">Thả thư mục hoặc file zip CT (nhiều lát .dcm) vào cửa sổ. App dựng 3 mặt cắt, ảnh toàn cảnh, mặt cắt từng răng và đo mm thật.</p>';
+      if (S.ctErr) h += '<p class="err">' + esc(S.ctErr) + '</p>';
+      if (r) h += (r.quality ? '<p class="muted small">Chất lượng: ' + esc(r.quality) + '</p>' : '') + '<p>' + esc(r.summary) + '</p>' + ((r.sections || []).length ? '<div class="secl">' + r.sections.map((x) => '<div><b>' + esc(x.k) + '.</b> ' + esc(x.v) + '</div>').join('') + '</div>' : '') + (r.general.length ? '<ul class="l small">' + r.general.map((x) => '<li>' + esc(x) + '</li>').join('') + '</ul>' : '') + (r.review.length ? '<div class="callout">Cần bác sĩ xác nhận:<ul class="l small">' + r.review.map((x) => '<li>' + esc(x) + '</li>').join('') + '</ul></div>' : '') + '<p class="muted small">' + r.count + ' răng có ghi nhận từ CT. ' + fmt(r.date) + '</p>';
+      h += '</div>'; }
     if (seeds.length) {
       h += '<div><div class="lbl">Kết quả từng răng</div><div class="slist">' + seeds.map((f) => {
         const st = stateOf(f), la = aiLatest(f), a = la.length ? la[0].ai : null, running = FX.rings.has(f);
@@ -689,10 +794,20 @@
     recompute(J); saveMarks(); persist(); repaintAll(); render(); toast('Đã đảo số răng trái/phải của ' + jawName(jn));
   }
   async function bytesOf(f) { return f.buf ? toAB(f.buf) : await f.arrayBuffer(); }
+  const normName = (x) => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/gi, 'd').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const isDcm = (f) => /\.(dcm|dicom)$/i.test(f.name || '');
   async function attachPano(file) {
-    const bytes = await bytesOf(file), bmp = await createImageBitmap(new Blob([bytes])), k = Math.min(1, 1800 / Math.max(bmp.width, bmp.height)), c = document.createElement('canvas'); c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k); c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
-    const url = c.toDataURL('image/jpeg', 0.88), bin = atob(url.split(',')[1]), arr = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
-    await window.api.cases.saveScan(S.C.key, 'pano', 'jpg', arr.buffer); S.C.pano = { ext: 'jpg', date: todayIso(), result: null }; S.pano.url = url; S.pano.err = ''; persist();
+    const bytes = await bytesOf(file); let meta = null, cv;
+    if (isDcm(file) || (bytes.byteLength > 132 && new Uint8Array(bytes, 128, 4).join() === '68,73,67,77')) {
+      const d = window.DICOM.parse(bytes); cv = window.DICOM.toCanvas(d); meta = Object.assign({ w: d.w, h: d.h, spacing: d.spacing, bits: d.bits }, d.meta);
+      if (meta.name && S.C && S.C.patient && S.C.patient.name && normName(meta.name) !== normName(S.C.patient.name)) setTimeout(() => toast('Chú ý: tên trên phim (' + meta.name + ') khác tên hồ sơ (' + S.C.patient.name + '). Kiểm tra lại đúng khách chưa.'), 600);
+    } else {
+      const bmp = await createImageBitmap(new Blob([bytes])); cv = document.createElement('canvas'); cv.width = bmp.width; cv.height = bmp.height; cv.getContext('2d').drawImage(bmp, 0, 0);
+    }
+    const k = Math.min(1, 2700 / Math.max(cv.width, cv.height)), c = document.createElement('canvas'); c.width = Math.round(cv.width * k); c.height = Math.round(cv.height * k); c.getContext('2d').drawImage(cv, 0, 0, c.width, c.height);
+    const url = c.toDataURL('image/jpeg', 0.93), bin = atob(url.split(',')[1]), arr = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    if (meta) meta.spacing = meta.spacing / k; /* mm trên mỗi điểm ảnh của ảnh đã lưu */
+    await window.api.cases.saveScan(S.C.key, 'pano', 'jpg', arr.buffer); S.C.pano = { ext: 'jpg', date: todayIso(), result: null, meta }; S.pano.url = url; S.pano.err = ''; persist();
   }
 
   /* ================= side panel events ================= */
@@ -715,6 +830,9 @@
     if (sh) { const row = sh.closest('[data-svc]'), key = row.dataset.mode + '|' + norm(row.dataset.svc), opening = S.care.open !== key; S.care.open = opening ? key : null; if (opening) setPin(row.dataset.svc, row.dataset.mode); else { S.care.pin = null; FX.pin = new Set(); } render(); return; }
     if (t.id === 'scanall') runScan({ all: false });
     if (t.id === 'runpano') runPano(false);
+    if (t.id === 'panoZoom' || t.id === 'panoImg') openXray();
+    if (t.id === 'ctOpen') openCt();
+    if (t.id === 'ctRun') runCt(false);
     if (t.id === 'addsvc') { const v = $('newsvc').value.trim(); if (!v) return; S.C.services = S.C.services || []; if (!allServices().some((x) => norm(x) === norm(v))) S.C.services.push(v); persist(); S.care.open = 'done|' + norm(v); setPin(v, 'done'); render(); return; }
     if (t.id === 'runai') runAi(S.sel);
     if (t.id === 'airep') aiReport();
@@ -738,6 +856,7 @@
     if (e.target.dataset.p === 'gender') { S.C.patient.gender = e.target.value; persist(); }
     if (id === 'miss') { const f = S.sel; S.C.marks.missing = S.C.marks.missing.filter((x) => x !== f); if (e.target.checked) { S.C.marks.missing.push(f); const J = S.jaws[jawOf(f)]; if (J) { J.seeds = J.seeds.filter((q) => q.f !== f); recompute(J); saveMarks(); } } persist(); repaintAll(); render(); }
     if (e.target.dataset.ck) { const v = e.target.dataset.ck, i = v.lastIndexOf('|'); toggleDone(v.slice(0, i), +v.slice(i + 1), e.target.checked); }
+    if (id === 'ctFile' && e.target.files.length) { importFiles(Array.from(e.target.files)); e.target.value = ''; return; }
     if (id === 'panoFile' && e.target.files[0]) { const fl = e.target.files[0]; attachPano(fl).then(() => { render(); toast('Đã thêm ảnh X-quang'); }).catch((er) => toast('Không đọc được ảnh: ' + cleanErr(er))); }
     if (e.target.dataset.td) { const t = S.C.care.find((x) => x.id === e.target.dataset.td); if (t) { t.done = e.target.checked; persist(); render(); } }
     if (e.target.dataset.ts) { const t = S.C.care.find((x) => x.id === e.target.dataset.ts); if (t) { t.show = e.target.checked; persist(); } }
@@ -767,9 +886,18 @@
     return out;
   }
   async function importFiles(files) {
-    const imgs = files.filter((f) => /\.(png|jpe?g|webp)$/i.test(f.name)), rest = files.filter((f) => imgs.indexOf(f) < 0);
+    let imgs = files.filter((f) => /\.(png|jpe?g|webp|dcm|dicom)$/i.test(f.name)), rest = files.filter((f) => imgs.indexOf(f) < 0);
+    for (const f of rest.slice()) { if (!/\.zip$/i.test(f.name)) continue; try { const z = await JSZip.loadAsync(toAB(f.buf || (await f.arrayBuffer()))), names = Object.keys(z.files).filter((n) => !z.files[n].dir && !/__MACOSX/.test(n)); const dc = names.filter((n) => /\.(dcm|dicom)$/i.test(n)), has3d = names.some((n) => /\.(ply|stl)$/i.test(n)); for (const n of dc) imgs.push({ name: n.split('/').pop(), buf: await z.files[n].async('arraybuffer') }); if (dc.length && !has3d) rest = rest.filter((x) => x !== f); } catch (e) { /* để luồng chính báo lỗi */ } }
+    const dcms = imgs.filter(isDcm);
+    if (!rest.length && dcms.length >= 20) { await importCt(dcms); return; }
     if (!rest.length && imgs.length) {
-      if (S.view === 'case' && S.C) { try { await attachPano(imgs[0]); S.tab = 'scan'; syncTabs(); render(); toast('Đã thêm ảnh X-quang. Bấm "AI đọc ảnh X-quang" để phân tích.'); } catch (er) { toast('Không đọc được ảnh: ' + cleanErr(er)); } }
+      if (!(S.view === 'case' && S.C) && isDcm(imgs[0])) { /* chưa mở hồ sơ: tạo hồ sơ theo tên trên phim */
+        try { const d = window.DICOM.parse(await bytesOf(imgs[0])), nm = (d.meta.name || 'KHACH').toUpperCase(), key = slugOf(nm), ex = await window.api.cases.load(key);
+          S.C = ex ? ex.data : newCase(key, nm); S.C.marks = S.C.marks || { upper: [], lower: [], missing: [] }; S.C.teeth = S.C.teeth || {}; S.C.care = S.C.care || []; S.C.report = S.C.report || { summary: '', advice: '', risks: '' };
+          clearJaws(); S.pano = { url: '', busy: false, err: '' }; await attachPano(imgs[0]); await window.api.cases.save(key, S.C); enterCase(); S.tab = 'scan'; syncTabs(); render(); toast('Đã tạo hồ sơ từ phim X-quang. Thêm scan 3D sau nếu có.'); } catch (er) { toast('Không đọc được phim: ' + cleanErr(er)); }
+        return;
+      }
+      if (S.view === 'case' && S.C) { try { await attachPano(imgs[0]); S.tab = 'scan'; syncTabs(); render(); toast('Đã thêm phim X-quang. Bấm "AI đọc phim" để phân tích.'); } catch (er) { toast('Không đọc được ảnh: ' + cleanErr(er)); } }
       else toast('Hãy mở scan của khách trước, rồi thêm ảnh X-quang.');
       return;
     }
@@ -809,7 +937,7 @@
       enterCase();
     } catch (err) { console.error(err); toast('Không mở được hồ sơ: ' + cleanErr(err)); } finally { $('busy').hidden = true; }
   }
-  function enterCase() { fxClear(); S.sel = null; S.mark = null; S.tab = 'scan'; S.care = { open: null, pin: null }; S.scan = { busy: false, phase: '', jaw: '', done: 0, total: 0, fail: [], err: '', cur: null, cancel: false, warn: [] }; $('hud').hidden = true; S.tint = true; syncTabs(); show('case'); resize(); fitAll(); setView('front'); $('vU').checked = true; $('vL').checked = true; Object.values(S.jaws).forEach((J) => (J.mesh.visible = true)); applyMarks(); render(); markGuide(); }
+  function enterCase() { S.vol = null; S.ctBusy = false; S.ctErr = ""; fxClear(); S.sel = null; S.mark = null; S.tab = 'scan'; S.care = { open: null, pin: null }; S.scan = { busy: false, phase: '', jaw: '', done: 0, total: 0, fail: [], err: '', cur: null, cancel: false, warn: [] }; $('hud').hidden = true; S.tint = true; syncTabs(); show('case'); resize(); fitAll(); setView('front'); $('vU').checked = true; $('vL').checked = true; Object.values(S.jaws).forEach((J) => (J.mesh.visible = true)); applyMarks(); render(); markGuide(); }
 
   /* ================= home ================= */
   function pendingOf(C) { let n = 0; Object.keys(C.teeth || {}).forEach((f) => { const m = new Map(); (C.teeth[f] || []).forEach((e) => { if (!e.svc) return; const k = norm(e.svc); const o = m.get(k) || { done: false }; if (e.kind === 'done') o.done = true; if (e.kind === 'advice' || e.kind === 'done') m.set(k, o); }); m.forEach((o) => { if (!o.done) n++; }); }); return n; }

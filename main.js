@@ -84,10 +84,12 @@ ipcMain.handle('cases:saveScan', (e, key, jaw, ext, buf) => {
   exts.forEach((x) => { try { fs.unlinkSync(path.join(dir, jaw + '.' + x)); } catch (er) {} });
   fs.writeFileSync(path.join(dir, jaw + '.' + useExt), Buffer.from(buf)); return true;
 });
+ipcMain.handle('cases:saveBlob', (e, key, name, buf) => { if (!/^[\w.-]+$/.test(String(name))) throw new Error('Tên file không hợp lệ'); const d = path.join(CASES(), safeKey(key)); fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, name), Buffer.from(buf)); return true; });
+ipcMain.handle('cases:loadBlob', (e, key, name) => { if (!/^[\w.-]+$/.test(String(name))) return null; const f = path.join(CASES(), safeKey(key), name); return fs.existsSync(f) ? fs.readFileSync(f) : null; });
 ipcMain.handle('cases:delete', (e, key) => { fs.rmSync(path.join(CASES(), safeKey(key)), { recursive: true, force: true }); return true; });
 ipcMain.handle('app:openDataFolder', () => { fs.mkdirSync(DATA(), { recursive: true }); return shell.openPath(DATA()); });
 ipcMain.handle('files:pick', async () => {
-  const r = await dialog.showOpenDialog(win, { title: 'Chọn file scan của khách (kèm ảnh X-quang nếu có)', properties: ['openFile', 'multiSelections'], filters: [{ name: 'Scan 3D và ảnh X-quang', extensions: ['zip', 'ply', 'stl', 'jpg', 'jpeg', 'png', 'webp'] }] });
+  const r = await dialog.showOpenDialog(win, { title: 'Chọn file scan của khách (kèm ảnh X-quang nếu có)', properties: ['openFile', 'multiSelections'], filters: [{ name: 'Scan 3D và ảnh X-quang', extensions: ['zip', 'ply', 'stl', 'jpg', 'jpeg', 'png', 'webp', 'dcm', 'dicom'] }] });
   if (r.canceled) return [];
   return r.filePaths.map((p) => ({ name: path.basename(p), buf: fs.readFileSync(p) }));
 });

@@ -97,3 +97,23 @@ img.pano{width:100%;border-radius:8px;border:1px solid var(--line);background:#0
 
 .hud .hbtns{display:flex;flex-wrap:wrap;gap:6px;align-items:center}.hud .hin{width:54px;padding:4px 6px;border:1px solid var(--line,#ccc);border-radius:6px;background:var(--panel);color:inherit;font-family:var(--mono)}
 .hud{max-height:60%;overflow:auto}
+
+.xv{position:fixed;inset:0;z-index:60;background:#05090b;display:flex;flex-direction:column}
+.xvb{display:flex;gap:14px;align-items:center;padding:8px 14px;background:var(--panel);border-bottom:1px solid var(--line,#444);flex-wrap:wrap;color:var(--ink,inherit)}
+.xvb label{display:flex;gap:6px;align-items:center;font-size:12px}.xvb .btn.on{background:var(--accent);color:#fff}
+.xvs{position:relative;flex:1;overflow:hidden;cursor:grab;user-select:none}
+.xvs img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;pointer-events:none}
+.xvl{position:absolute;left:0;top:0;transform-origin:0 0;pointer-events:none;overflow:visible}
+img.pano{cursor:zoom-in}
+.secl{display:grid;gap:4px;font-size:13px;margin:6px 0}
+
+.cv{position:fixed;inset:0;z-index:61;background:#04080a;display:flex;flex-direction:column;color:#dfe9ec}
+.cvb{display:flex;gap:10px 14px;align-items:center;padding:8px 12px;background:#10181b;border-bottom:1px solid #2b3a3f;flex-wrap:wrap;color:#dfe9ec}.cvb .btn.ghost{background:transparent;color:#dfe9ec;border-color:#46585e}.cvb .muted{color:#8fa4ab}.cvb select{background:#1b272b;color:#dfe9ec;border:1px solid #46585e;border-radius:6px;padding:3px 6px}
+.cvb label{display:flex;gap:6px;align-items:center;font-size:12px}.cvb select{font:inherit;font-size:12px}.cvb .on{background:var(--accent)!important;color:#fff!important}
+.cvg{display:flex;gap:4px}.cvg>button:not(.btn){border:1px solid var(--line,#999);background:transparent;color:inherit;border-radius:6px;padding:4px 9px;font:inherit;font-size:12px;cursor:pointer}
+.cvgrid{flex:1;display:grid;grid-template-columns:1fr 2fr;grid-template-rows:1fr 1fr;gap:3px;min-height:0;background:#222}
+.cvgrid{grid-template-columns:repeat(3,1fr)}
+.cvp{position:relative;background:#000;min-width:0;min-height:0;overflow:hidden}.cvp.wide{grid-column:span 2}
+.cvp canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+.cvp>i{position:absolute;right:8px;top:6px;font-style:normal;font-size:11px;color:#9fb3ba;pointer-events:none;text-shadow:0 0 3px #000}
+.cv.ruling .cvp canvas{cursor:crosshair}
