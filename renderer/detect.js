@@ -107,7 +107,7 @@
 
     /* 3. gán số bằng quy hoạch động */
     function solve(side, kap, base0) {
-      const ms = (q) => { const F = base0 + q; if (inv && inv.absent.has(F)) return 0.08; if (inv && inv.present.has(F)) return 3.2; return MISS[q - 1]; }, ap = (i) => (inv && inv.absent.has(base0 + i + 1) ? 2.2 : 0);
+      const ms = (q) => { const F = base0 + q; if (inv && inv.absent.has(F)) return 0.5; if (inv && inv.present.has(F)) return MISS[q - 1] + 0.8; return MISS[q - 1]; }, ap = (i) => (inv && inv.absent.has(base0 + i + 1) ? 0.6 : 0);
       const n = side.length, S = []; let acc = 0; const Wd = WIDTH[jaw]; for (let i = 0; i < 8; i++) { S.push((acc + Wd[i] / 2) * kap); acc += Wd[i]; }
       const sj = []; let prev = { cu: mu, cv: mv }, run = 0; side.forEach((o, j) => { run += Math.hypot(o.cu - prev.cu, o.cv - prev.cv); sj.push(run); prev = o; });
       const Ea = AREA[jaw].map((x) => x * kap * kap), INF = 1e9, f = [], bk = [];
@@ -120,9 +120,10 @@
         if (base + 1.6 < f[j + 1][i]) { f[j + 1][i] = base + 1.6; bk[j + 1][i] = [i, 0, 0]; }
         for (let t = i + 1; t <= 8; t++) {
           let sk = 0; for (let q = i + 1; q < t; q++) sk += ms(q);
-          const c1 = base + sk + mc(j, t - 1, side[j].area);
+          const pd = (i > 0 && j > 0) ? Math.pow((Math.hypot(side[j].cu - side[j - 1].cu, side[j].cv - side[j - 1].cv) - (S[t - 1] - S[i - 1])) / 3.0, 2) * 0.6 : 0; /* khoảng cách hai cụm liền kề phải khớp với số răng bị bỏ qua */
+          const c1 = base + sk + pd + mc(j, t - 1, side[j].area);
           if (c1 < f[j + 1][t]) { f[j + 1][t] = c1; bk[j + 1][t] = [i, 1, 0]; }
-          if (t >= i + 2 && side[j].area > 1.5 * Math.min(Ea[t - 2], Ea[t - 1])) { // một cụm = hai răng dính nhau
+          if (t >= i + 2 && side[j].area > 1.05 * (Ea[t - 2] + Ea[t - 1])) { // một cụm = hai răng dính nhau
             let sk2 = 0; for (let q = i + 1; q < t - 1; q++) sk2 += ms(q);
             const half = side[j].area / 2, c2 = base + sk2 + 0.35 + 0.5 * (Math.abs(Math.log(half / Ea[t - 2])) + Math.abs(Math.log(half / Ea[t - 1]))) + 0.9 * Math.pow((sj[j] - (S[t - 2] + S[t - 1]) / 2) / 3.5, 2);
             if (c2 < f[j + 1][t]) { f[j + 1][t] = c2; bk[j + 1][t] = [i, 2, 0]; }
